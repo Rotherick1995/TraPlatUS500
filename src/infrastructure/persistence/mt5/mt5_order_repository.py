@@ -13,11 +13,32 @@ class MT5OrderRepository(OrderRepository):
     
     def __init__(self):
         """Inicializa el repositorio de órdenes MT5."""
-        pass
+        self.initialized = False
+    
+    def initialize(self) -> bool:
+        """
+        Inicializa el repositorio.
+        
+        Returns:
+            bool: True si se inicializó correctamente
+        """
+        try:
+            # Verificar si MT5 ya está inicializado
+            if mt5.initialize():
+                self.initialized = True
+                return True
+            else:
+                return False
+        except Exception:
+            return False
     
     def _ensure_connection(self) -> bool:
         """Verifica que haya conexión a MT5."""
         try:
+            # Si no está inicializado, intentar inicializar
+            if not self.initialized:
+                return self.initialize()
+            
             account_info = mt5.account_info()
             return account_info is not None
         except:

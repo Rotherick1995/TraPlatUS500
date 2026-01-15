@@ -21,9 +21,22 @@ class MT5DataRepository(MarketDataRepository):
     def _ensure_connection(self) -> bool:
         """Asegura que haya una conexión activa a MT5."""
         try:
+            # Intentar inicializar si no está inicializado
+            if not self._initialized:
+                if not mt5.initialize():
+                    return False
+                self._initialized = True
+            
             account_info = mt5.account_info()
             return account_info is not None
         except:
+            # Intentar inicializar
+            try:
+                if mt5.initialize():
+                    self._initialized = True
+                    return True
+            except:
+                pass
             return False
     
     def _mt5_to_candle(self, mt5_rate: tuple) -> Optional[Candle]:
@@ -37,7 +50,8 @@ class MT5DataRepository(MarketDataRepository):
                 close=float(mt5_rate[4]),
                 volume=int(mt5_rate[5])
             )
-        except:
+        except Exception as e:
+            print(f"Error convirtiendo candle: {e}")
             return None
     
     def initialize(self) -> bool:
@@ -47,28 +61,38 @@ class MT5DataRepository(MarketDataRepository):
                 return False
             self._initialized = True
             return True
-        except:
+        except Exception as e:
+            print(f"Error inicializando MT5: {e}")
             return False
     
-    def get_historical_data(self, symbol: str, timeframe: str, count: int = None,
-                           start_date: datetime = None, end_date: datetime = None) -> Tuple[Optional[List[Candle]], Any]:
-        """Obtiene datos históricos de mercado."""
+    # MÉTODO NUEVO: get_candles (para compatibilidad con fetch_market_data.py)
+    def get_candles(
+        self,
+        symbol: str,
+        timeframe: str,
+        count: int = 100,
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None
+    ) -> List[Candle]:
+        """Obtiene velas desde MT5 - Compatibilidad con fetch_market_data.py."""
         if not self._ensure_connection():
-            return None, None
-        
-        # Usar valores por defecto si no se especifican
-        if count is None:
-            count = DEFAULT_DATA_COUNT
+            return []
         
         try:
             # Convertir timeframe a formato MT5
             mt5_timeframe = get_mt5_timeframe(timeframe)
             
-            # Obtener datos de MT5
-            rates = mt5.copy_rates_from_pos(symbol, mt5_timeframe, 0, count)
+            # Obtener datos de MT5 según los parámetros
+            if from_date and to_date:
+                rates = mt5.copy_rates_range(symbol, mt5_timeframe, from_date, to_date)
+            elif from_date:
+                rates = mt5.copy_rates_from(symbol, mt5_timeframe, from_date, count)
+            else:
+                rates = mt5.copy_rates_from_pos(symbol, mt5_timeframe, 0, count)
             
             if rates is None or len(rates) == 0:
-                return None, None
+                print(f"No se pudieron obtener datos para {symbol} - {timeframe}")
+                return []
             
             # Convertir a lista de Candle
             candles = []
@@ -77,14 +101,43 @@ class MT5DataRepository(MarketDataRepository):
                 if candle:
                     candles.append(candle)
             
+            return candles
+            
+        except Exception as e:
+            print(f"Error en get_candles: {e}")
+            return []
+    
+    def get_historical_data(self, symbol: str, timeframe: str, count: int = None,
+                           start_date: datetime = None, end_date: datetime = None) -> Tuple[Optional[List[Candle]], Any]:
+        """Obtiene datos históricos de mercado."""
+        # Usar get_candles internamente
+        if not self._ensure_connection():
+            return None, "No hay conexión"
+        
+        # Usar valores por defecto si no se especifican
+        if count is None:
+            count = DEFAULT_DATA_COUNT
+        
+        try:
+            candles = self.get_candles(
+                symbol=symbol,
+                timeframe=timeframe,
+                count=count,
+                from_date=start_date,
+                to_date=end_date
+            )
+            
+            if not candles:
+                return None, "No se pudieron obtener datos"
+            
             return candles, "OK"
             
         except Exception as e:
-            print(f"Error: {str(e)}")
-            return None, None
+            print(f"Error en get_historical_data: {str(e)}")
+            return None, str(e)
     
-    def get_current_price(self, symbol: str) -> Optional[Dict[str, float]]:
-        """Obtiene el precio actual de un símbolo."""
+    def get_current_tick(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Obtiene el tick actual de un símbolo."""
         if not self._ensure_connection():
             return None
         
@@ -97,11 +150,24 @@ class MT5DataRepository(MarketDataRepository):
             return {
                 'bid': float(symbol_info.bid),
                 'ask': float(symbol_info.ask),
-                'last': float(symbol_info.last)
+                'last': float(symbol_info.last),
+                'time': datetime.fromtimestamp(symbol_info.time)
             }
             
-        except:
+        except Exception as e:
+            print(f"Error en get_current_tick: {e}")
             return None
+    
+    def get_current_price(self, symbol: str) -> Optional[Dict[str, float]]:
+        """Obtiene el precio actual de un símbolo."""
+        tick = self.get_current_tick(symbol)
+        if tick:
+            return {
+                'bid': tick['bid'],
+                'ask': tick['ask'],
+                'last': tick['last']
+            }
+        return None
     
     def get_symbol_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Obtiene información detallada de un símbolo."""
@@ -125,7 +191,8 @@ class MT5DataRepository(MarketDataRepository):
                 'margin_rate': info.margin_rate
             }
             
-        except:
+        except Exception as e:
+            print(f"Error en get_symbol_info: {e}")
             return None
     
     def get_available_symbols(self) -> List[str]:
@@ -148,12 +215,16 @@ class MT5DataRepository(MarketDataRepository):
             
             return sorted(active_symbols)
             
-        except:
+        except Exception as e:
+            print(f"Error en get_available_symbols: {e}")
             return []
     
     def disconnect(self):
         """Desconecta del repositorio."""
-        mt5.shutdown()
+        try:
+            mt5.shutdown()
+        except:
+            pass
         self._initialized = False
 
 

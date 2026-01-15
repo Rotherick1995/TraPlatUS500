@@ -39,10 +39,10 @@ CONNECTION_RETRY_DELAY = 2  # Segundos entre reintentos
 # ============================================================================
 # CONFIGURACIÓN BÁSICA
 # ============================================================================
-
+AUTO_CONNECT = True
 # Símbolo principal
 DEFAULT_SYMBOL = "US500"
-
+FALLBACK_SYMBOL = "US500"
 # Timeframes disponibles
 TIMEFRAMES = {
     "1M": 1,      # 1 minuto

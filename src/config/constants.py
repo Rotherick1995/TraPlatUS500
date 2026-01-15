@@ -40,6 +40,23 @@ class TradeDirection(Enum):
     BUY = "BUY"
     SELL = "SELL"
 
+# AÑADIR PositionType AQUÍ
+class PositionType(Enum):
+    """Tipos de posición (BUY/SELL)"""
+    BUY = "BUY"
+    SELL = "SELL"
+    
+    def __str__(self):
+        return self.value
+    
+    @property
+    def is_buy(self):
+        return self == PositionType.BUY
+    
+    @property
+    def is_sell(self):
+        return self == PositionType.SELL
+
 class ConnectionStatus(Enum):
     """Estados de conexión MT5"""
     DISCONNECTED = "DISCONNECTED"
