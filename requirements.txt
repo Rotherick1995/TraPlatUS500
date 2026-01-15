@@ -1,0 +1,103 @@
+
+
+# UI
+PyQt5
+pyqtgraph
+QScintilla
+QtAwesome
+qt-material
+
+# Trading & Data
+MetaTrader5
+pandas
+numpy
+pandas-ta
+TA-Lib
+yfinance
+ccxt
+alpha-vantage
+requests
+beautifulsoup4
+
+# Analysis & ML
+scikit-learn
+tensorflow
+torch
+statsmodels
+scipy
+keras
+
+# Visualization
+matplotlib
+seaborn
+plotly
+mplfinance
+bokeh
+
+# Database & Storage
+sqlalchemy
+redis
+psycopg2-binary
+pymongo
+alembic
+dataset
+
+# Async & Performance
+asyncio
+aiohttp
+
+numba
+cython
+
+# Logging & Monitoring
+loguru
+structlog
+prometheus-client
+sentry-sdk
+
+# Testing & Quality
+pytest
+pytest-asyncio
+pytest-qt
+pytest-cov
+hypothesis
+
+# Development
+black
+flake8
+mypy
+pre-commit
+pylint
+
+# Messaging & Events
+pika
+kombu
+celery
+websockets
+
+# Utils
+python-dotenv
+click
+typer
+rich
+tqdm
+python-dateutil
+pytz
+
+# Risk & Optimization
+cvxopt
+pyportfolioopt
+riskparityportfolio
+pyomo
+
+# Time Series
+arch
+prophet
+darts
+tsfresh
+
+# APIs
+fastapi
+uvicorn
+flask
+django
