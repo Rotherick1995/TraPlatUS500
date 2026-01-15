@@ -1,15 +1,9 @@
 # src/application/use_cases/fetch_market_data.py
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 
-# Importar con manejo de errores
-try:
-    from src.domain.entities.candle import Candle
-    from src.infrastructure.persistence.mt5.mt5_data_repository import create_mt5_data_repository
-    REPOSITORY_AVAILABLE = True
-except ImportError:
-    REPOSITORY_AVAILABLE = False
-    print("⚠️ MT5 data repository no disponible")
+from src.domain.entities.candle import Candle
+from src.infrastructure.persistence.mt5.mt5_data_repository import create_mt5_data_repository
 
 
 class FetchMarketDataUseCase:
@@ -17,10 +11,7 @@ class FetchMarketDataUseCase:
     
     def __init__(self, mt5_use_case=None):
         self.mt5_use_case = mt5_use_case
-        if REPOSITORY_AVAILABLE:
-            self.data_repository = create_mt5_data_repository()
-        else:
-            self.data_repository = None
+        self.data_repository = create_mt5_data_repository()
     
     def get_historical_data(
         self, 
@@ -31,80 +22,122 @@ class FetchMarketDataUseCase:
         to_date: Optional[datetime] = None
     ) -> Dict[str, Any]:
         """Obtiene datos históricos."""
-        if not REPOSITORY_AVAILABLE or not self.data_repository:
-            return {
-                'success': False,
-                'message': "Repositorio de datos no disponible",
-                'data': []
-            }
-        
         try:
-            # Primero inicializar si es necesario
-            if not hasattr(self.data_repository, 'initialized') or not self.data_repository.initialized:
+            # Inicializar repositorio
+            if not self.data_repository._initialized:
                 self.data_repository.initialize()
             
-            candles = self.data_repository.get_candles(
+            # Obtener datos
+            candles, message = self.data_repository.get_historical_data(
                 symbol=symbol,
                 timeframe=timeframe,
                 count=count,
-                from_date=from_date,
-                to_date=to_date
+                start_date=from_date,
+                end_date=to_date
             )
             
-            return {
-                'success': True,
-                'data': candles,
-                'message': f"Obtenidas {len(candles)} velas"
-            }
+            # Obtener información del símbolo (precio mínimo, dígitos, etc.)
+            symbol_info = self.data_repository.get_symbol_info(symbol)
+            
+            if candles:
+                result = {
+                    'success': True,
+                    'data': candles,
+                    'message': f"Obtenidas {len(candles)} velas",
+                    'count': len(candles),
+                    'symbol_info': symbol_info  # Agregar información del símbolo
+                }
+                
+                # Agregar hora del servidor si está disponible
+                server_time = self.data_repository.get_server_time()
+                if server_time:
+                    result['server_time'] = server_time
+                
+                return result
+            else:
+                return {
+                    'success': False,
+                    'data': [],
+                    'message': message or "No se pudieron obtener datos",
+                    'count': 0,
+                    'symbol_info': None
+                }
             
         except Exception as e:
             return {
                 'success': False,
                 'data': [],
-                'message': f"Error: {str(e)}"
+                'message': f"Error: {str(e)}",
+                'count': 0,
+                'symbol_info': None
             }
     
     def get_real_time_data(self, symbol: str) -> Dict[str, Any]:
         """Obtiene datos en tiempo real."""
-        if not REPOSITORY_AVAILABLE or not self.data_repository:
-            return {
-                'success': False,
-                'message': "Repositorio de datos no disponible",
-                'data': {}
-            }
-        
         try:
-            # Primero inicializar si es necesario
-            if not hasattr(self.data_repository, 'initialized') or not self.data_repository.initialized:
+            # Inicializar repositorio
+            if not self.data_repository._initialized:
                 self.data_repository.initialize()
             
-            # Intentar obtener tick
-            tick = None
-            if hasattr(self.data_repository, 'get_current_tick'):
-                tick = self.data_repository.get_current_tick(symbol)
+            # Obtener tick
+            tick = self.data_repository.get_current_tick(symbol)
             
-            if tick and hasattr(tick, 'bid') and hasattr(tick, 'ask'):
+            # Obtener información del símbolo
+            symbol_info = self.data_repository.get_symbol_info(symbol)
+            
+            # Obtener hora del servidor
+            server_time = self.data_repository.get_server_time()
+            
+            if tick:
                 return {
                     'success': True,
                     'data': {
-                        'bid': tick.bid,
-                        'ask': tick.ask,
-                        'spread': (tick.ask - tick.bid) * 10000,
-                        'timestamp': getattr(tick, 'time', datetime.now())
+                        'bid': tick['bid'],
+                        'ask': tick['ask'],
+                        'spread': tick['ask'] - tick['bid'],
+                        'timestamp': tick['time']
                     },
+                    'symbol_info': symbol_info,
+                    'server_time': server_time,
                     'message': "Datos en tiempo real obtenidos"
                 }
             else:
-                # Fallback: usar datos simulados
+                return {
+                    'success': False,
+                    'data': {},
+                    'symbol_info': symbol_info,
+                    'server_time': server_time,
+                    'message': "No se pudo obtener el tick actual"
+                }
+                
+        except Exception as e:
+            return {
+                'success': False,
+                'data': {},
+                'symbol_info': None,
+                'server_time': None,
+                'message': f"Error: {str(e)}"
+            }
+    
+    def get_symbol_info(self, symbol: str) -> Dict[str, Any]:
+        """Obtiene información detallada del símbolo."""
+        try:
+            if not self.data_repository._initialized:
+                self.data_repository.initialize()
+            
+            info = self.data_repository.get_symbol_info(symbol)
+            
+            if info:
                 return {
                     'success': True,
-                    'data': {
-                        'bid': 4500.0,
-                        'ask': 4500.1,
-                        'spread': 1.0,
-                        'timestamp': datetime.now()
-                    },
-                    'message': "Datos simulados (modo fallback)"
+                    'data': info,
+                    'message': "Información del símbolo obtenida"
+                }
+            else:
+                return {
+                    'success': False,
+                    'data': {},
+                    'message': "No se pudo obtener información del símbolo"
                 }
                 
         except Exception as e:

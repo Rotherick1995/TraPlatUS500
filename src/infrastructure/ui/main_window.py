@@ -6,19 +6,20 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QSplitter, QGroupBox, QGridLayout, QMessageBox)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QPalette
+import pyqtgraph as pg
+import numpy as np
+from datetime import datetime
 
 # Importaciones de tu proyecto
 from src.application.use_cases.connect_to_mt5 import create_connect_to_mt5_use_case
 from src.application.use_cases.fetch_market_data import create_fetch_market_data_use_case
 from src.config import settings
+from src.infrastructure.ui.chart_view import ChartView
+from src.infrastructure.ui.control_panel import ControlPanel
 
 
 class MainWindow(QMainWindow):
     """Ventana principal de la plataforma de trading."""
-    
-    # Señales para comunicación entre hilos
-    connection_status_changed = pyqtSignal(bool, str)
-    data_updated = pyqtSignal(dict)
     
     def __init__(self):
         super().__init__()
@@ -30,7 +31,7 @@ class MainWindow(QMainWindow):
         # Estado de la aplicación
         self.is_connected = False
         self.current_symbol = settings.DEFAULT_SYMBOL
-        self.current_timeframe = "1H"
+        self.current_timeframe = "H1"
         
         # Configurar UI
         self.setup_ui()
@@ -55,6 +56,7 @@ class MainWindow(QMainWindow):
         # Layout principal
         main_layout = QVBoxLayout(central_widget)
         main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(5)
         
         # 1. Barra superior (conexión y símbolos)
         top_bar = self.create_top_bar()
@@ -63,13 +65,26 @@ class MainWindow(QMainWindow):
         # 2. Área principal dividida
         splitter = QSplitter(Qt.Horizontal)
         
-        # Panel izquierdo (gráfico - placeholder)
-        left_panel = self.create_chart_panel()
-        splitter.addWidget(left_panel)
+        # Panel izquierdo (gráfico) - Usar ChartView personalizado
+        self.chart_view = ChartView()
+        splitter.addWidget(self.chart_view)
         
-        # Panel derecho (control)
-        right_panel = self.create_control_panel()
-        splitter.addWidget(right_panel)
+        # Panel derecho (control) - Usar ControlPanel personalizado
+        self.control_panel = ControlPanel()
+        splitter.addWidget(self.control_panel)
+        
+        # Conectar señales del control panel
+        self.control_panel.connect_requested.connect(self.connect_to_mt5)
+        self.control_panel.disconnect_requested.connect(self.disconnect_from_mt5)
+        self.control_panel.symbol_changed.connect(self.on_symbol_changed)
+        self.control_panel.timeframe_changed.connect(self.on_timeframe_changed)
+        self.control_panel.buy_requested.connect(self.on_buy_requested)
+        self.control_panel.sell_requested.connect(self.on_sell_requested)
+        self.control_panel.refresh_positions.connect(self.refresh_positions)
+        
+        # Conectar señales del chart view
+        self.chart_view.symbol_changed.connect(self.on_symbol_changed)
+        self.chart_view.timeframe_changed.connect(self.on_timeframe_changed)
         
         # Configurar tamaños relativos
         splitter.setSizes([1000, 400])
@@ -77,8 +92,22 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(splitter)
         
         # 3. Barra inferior (logs)
-        log_widget = self.create_log_widget()
-        main_layout.addWidget(log_widget)
+        self.txt_mini_log = QTextEdit()
+        self.txt_mini_log.setMaximumHeight(100)
+        self.txt_mini_log.setReadOnly(True)
+        self.txt_mini_log.setStyleSheet("""
+            QTextEdit {
+                background-color: #1a1a1a;
+                color: #ccc;
+                font-family: monospace;
+                font-size: 10px;
+                border: 1px solid #333;
+                border-radius: 4px;
+            }
+        """)
+        self.txt_mini_log.setPlaceholderText("Logs de la aplicación...")
+        
+        main_layout.addWidget(self.txt_mini_log)
         
         # 4. Barra de estado
         self.setup_status_bar()
@@ -127,16 +156,16 @@ class MainWindow(QMainWindow):
         self.lbl_connection_status = QLabel("❌ Desconectado")
         self.lbl_connection_status.setStyleSheet("font-weight: bold; color: #ff6b6b;")
         
-        # Selector de símbolo
+        # Selector de símbolo (sincronizado con chart_view)
         self.cmb_symbol = QComboBox()
-        self.cmb_symbol.addItems(["US500", "EURUSD", "GBPUSD", "XAUUSD", "BTCUSD"])
+        self.cmb_symbol.addItems(["EURUSD", "US500", "GBPUSD", "USDJPY", "XAUUSD"])
         self.cmb_symbol.setCurrentText(self.current_symbol)
         self.cmb_symbol.currentTextChanged.connect(self.on_symbol_changed)
         self.cmb_symbol.setFixedWidth(100)
         
-        # Selector de timeframe
+        # Selector de timeframe (sincronizado con chart_view)
         self.cmb_timeframe = QComboBox()
-        self.cmb_timeframe.addItems(["1M", "5M", "15M", "30M", "1H", "4H", "1D", "1W"])
+        self.cmb_timeframe.addItems(["M1", "M5", "M15", "M30", "H1", "H4", "D1"])
         self.cmb_timeframe.setCurrentText(self.current_timeframe)
         self.cmb_timeframe.currentTextChanged.connect(self.on_timeframe_changed)
         self.cmb_timeframe.setFixedWidth(80)
@@ -164,270 +193,6 @@ class MainWindow(QMainWindow):
         
         return layout
     
-    def create_chart_panel(self):
-        """Crear panel del gráfico (placeholder)."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Título del gráfico
-        self.lbl_chart_title = QLabel(f"Gráfico: {self.current_symbol} - {self.current_timeframe}")
-        self.lbl_chart_title.setStyleSheet("font-size: 16px; font-weight: bold; padding: 10px;")
-        self.lbl_chart_title.setAlignment(Qt.AlignCenter)
-        
-        # Área del gráfico (placeholder)
-        self.lbl_chart_placeholder = QLabel(
-            "<center><h3>Gráfico de Velas</h3>"
-            "<p>Para mostrar el gráfico, instale pyqtgraph:</p>"
-            "<code>pip install pyqtgraph</code></center>"
-        )
-        self.lbl_chart_placeholder.setStyleSheet("""
-            QLabel {
-                background-color: #1a1a1a;
-                border: 2px dashed #444;
-                border-radius: 8px;
-                color: #888;
-                font-family: monospace;
-                padding: 40px;
-            }
-        """)
-        self.lbl_chart_placeholder.setAlignment(Qt.AlignCenter)
-        
-        # Información de precios
-        price_widget = QWidget()
-        price_layout = QHBoxLayout(price_widget)
-        
-        self.lbl_bid = QLabel("Bid: --")
-        self.lbl_ask = QLabel("Ask: --")
-        self.lbl_spread = QLabel("Spread: --")
-        self.lbl_change = QLabel("Cambio: --")
-        
-        for lbl in [self.lbl_bid, self.lbl_ask, self.lbl_spread, self.lbl_change]:
-            lbl.setStyleSheet("font-family: monospace; font-size: 14px; padding: 5px 15px;")
-            price_layout.addWidget(lbl)
-        
-        price_layout.addStretch()
-        
-        # Agregar al layout principal
-        layout.addWidget(self.lbl_chart_title)
-        layout.addWidget(self.lbl_chart_placeholder, 1)
-        layout.addWidget(price_widget)
-        
-        return widget
-    
-    def create_control_panel(self):
-        """Crear panel de control lateral."""
-        tab_widget = QTabWidget()
-        
-        # 1. Pestaña de Trading
-        trading_tab = self.create_trading_tab()
-        tab_widget.addTab(trading_tab, "📊 Trading")
-        
-        # 2. Pestaña de Posiciones
-        positions_tab = self.create_positions_tab()
-        tab_widget.addTab(positions_tab, "💰 Posiciones")
-        
-        # 3. Pestaña de Configuración
-        config_tab = self.create_config_tab()
-        tab_widget.addTab(config_tab, "⚙️ Config")
-        
-        # 4. Pestaña de Logs
-        log_tab = self.create_log_tab()
-        tab_widget.addTab(log_tab, "📝 Logs")
-        
-        return tab_widget
-    
-    def create_trading_tab(self):
-        """Crear pestaña de trading."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        # Grupo de operación
-        group_trade = QGroupBox("Operación Rápida")
-        group_layout = QGridLayout(group_trade)
-        
-        # Volumen
-        group_layout.addWidget(QLabel("Volumen:"), 0, 0)
-        self.cmb_volume = QComboBox()
-        self.cmb_volume.addItems(["0.01", "0.1", "0.5", "1.0", "2.0", "5.0"])
-        self.cmb_volume.setCurrentText("0.1")
-        group_layout.addWidget(self.cmb_volume, 0, 1)
-        
-        # SL y TP
-        group_layout.addWidget(QLabel("SL (pips):"), 1, 0)
-        self.spin_sl = QComboBox()
-        self.spin_sl.addItems(["10", "20", "50", "100", "200"])
-        self.spin_sl.setCurrentText("50")
-        group_layout.addWidget(self.spin_sl, 1, 1)
-        
-        group_layout.addWidget(QLabel("TP (pips):"), 2, 0)
-        self.spin_tp = QComboBox()
-        self.spin_tp.addItems(["20", "50", "100", "200", "500"])
-        self.spin_tp.setCurrentText("100")
-        group_layout.addWidget(self.spin_tp, 2, 1)
-        
-        # Botones de operación
-        self.btn_buy = QPushButton("🟢 COMPRAR")
-        self.btn_buy.setStyleSheet("""
-            QPushButton {
-                background-color: #00a86b;
-                color: white;
-                font-weight: bold;
-                padding: 12px;
-                border-radius: 6px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #00b87b;
-            }
-            QPushButton:disabled {
-                background-color: #555;
-            }
-        """)
-        self.btn_buy.clicked.connect(lambda: self.open_position("buy"))
-        self.btn_buy.setEnabled(False)
-        
-        self.btn_sell = QPushButton("🔴 VENDER")
-        self.btn_sell.setStyleSheet("""
-            QPushButton {
-                background-color: #ff4444;
-                color: white;
-                font-weight: bold;
-                padding: 12px;
-                border-radius: 6px;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #ff5555;
-            }
-            QPushButton:disabled {
-                background-color: #555;
-            }
-        """)
-        self.btn_sell.clicked.connect(lambda: self.open_position("sell"))
-        self.btn_sell.setEnabled(False)
-        
-        group_layout.addWidget(self.btn_buy, 3, 0, 1, 2)
-        group_layout.addWidget(self.btn_sell, 4, 0, 1, 2)
-        
-        # Grupo de información de cuenta
-        group_account = QGroupBox("Información de Cuenta")
-        account_layout = QVBoxLayout(group_account)
-        
-        self.lbl_balance = QLabel("Balance: --")
-        self.lbl_equity = QLabel("Equity: --")
-        self.lbl_margin = QLabel("Margen: --")
-        self.lbl_free_margin = QLabel("Margen Libre: --")
-        self.lbl_margin_level = QLabel("Nivel de Margen: --")
-        
-        for lbl in [self.lbl_balance, self.lbl_equity, self.lbl_margin, 
-                   self.lbl_free_margin, self.lbl_margin_level]:
-            lbl.setStyleSheet("font-family: monospace; padding: 3px;")
-            account_layout.addWidget(lbl)
-        
-        account_layout.addStretch()
-        
-        # Agregar grupos al layout
-        layout.addWidget(group_trade)
-        layout.addWidget(group_account)
-        layout.addStretch()
-        
-        return widget
-    
-    def create_positions_tab(self):
-        """Crear pestaña de posiciones."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        # Lista de posiciones (placeholder)
-        self.txt_positions = QTextEdit()
-        self.txt_positions.setReadOnly(True)
-        self.txt_positions.setStyleSheet("""
-            QTextEdit {
-                background-color: #1a1a1a;
-                border: 1px solid #444;
-                border-radius: 4px;
-                font-family: monospace;
-                font-size: 12px;
-            }
-        """)
-        self.txt_positions.setPlaceholderText("No hay posiciones abiertas...")
-        
-        # Botón de actualizar posiciones
-        self.btn_refresh_positions = QPushButton("🔄 Actualizar Posiciones")
-        self.btn_refresh_positions.clicked.connect(self.refresh_positions)
-        self.btn_refresh_positions.setEnabled(False)
-        
-        layout.addWidget(self.txt_positions)
-        layout.addWidget(self.btn_refresh_positions)
-        
-        return widget
-    
-    def create_config_tab(self):
-        """Crear pestaña de configuración."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        # Información de configuración
-        info_text = f"""
-        <h3>Configuración MT5</h3>
-        <p><b>Servidor:</b> {getattr(settings, 'MT5_SERVER', 'No configurado')}</p>
-        <p><b>Login:</b> {getattr(settings, 'MT5_LOGIN', 'No configurado')}</p>
-        <p><b>Símbolo por defecto:</b> {getattr(settings, 'DEFAULT_SYMBOL', 'No configurado')}</p>
-        <p><b>Símbolo alternativo:</b> {getattr(settings, 'FALLBACK_SYMBOL', 'No configurado')}</p>
-        <hr>
-        <p>Edite <code>src/config/settings.py</code> para cambiar la configuración.</p>
-        """
-        
-        lbl_info = QLabel(info_text)
-        lbl_info.setWordWrap(True)
-        
-        layout.addWidget(lbl_info)
-        layout.addStretch()
-        
-        return widget
-    
-    def create_log_tab(self):
-        """Crear pestaña de logs."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        self.txt_logs = QTextEdit()
-        self.txt_logs.setReadOnly(True)
-        self.txt_logs.setStyleSheet("""
-            QTextEdit {
-                background-color: #000;
-                color: #0f0;
-                font-family: 'Courier New', monospace;
-                font-size: 11px;
-                border: 1px solid #333;
-            }
-        """)
-        
-        layout.addWidget(self.txt_logs)
-        
-        return widget
-    
-    def create_log_widget(self):
-        """Crear widget de log en la parte inferior."""
-        widget = QTextEdit()
-        widget.setMaximumHeight(100)
-        widget.setReadOnly(True)
-        widget.setStyleSheet("""
-            QTextEdit {
-                background-color: #1a1a1a;
-                color: #ccc;
-                font-family: monospace;
-                font-size: 10px;
-                border: 1px solid #333;
-                border-radius: 4px;
-            }
-        """)
-        widget.setPlaceholderText("Logs de la aplicación...")
-        
-        self.txt_mini_log = widget
-        return widget
-    
     def setup_status_bar(self):
         """Configurar barra de estado."""
         self.statusBar().showMessage("Listo")
@@ -453,7 +218,6 @@ class MainWindow(QMainWindow):
     
     def update_clock(self):
         """Actualizar reloj en la barra de estado."""
-        from datetime import datetime
         current_time = datetime.now().strftime("%H:%M:%S")
         self.lbl_status_time.setText(current_time)
     
@@ -469,10 +233,9 @@ class MainWindow(QMainWindow):
             # Crear caso de uso
             self.mt5_use_case = create_connect_to_mt5_use_case(max_retries=3)
             
-            # Conectar - esto devuelve un DICCIONARIO
+            # Conectar
             result = self.mt5_use_case.connect()
             
-            # CORRECTO: Usar notación de diccionario
             if result['success']:
                 self.is_connected = True
                 self.update_connection_status(True, "✅ Conectado a MT5")
@@ -482,23 +245,23 @@ class MainWindow(QMainWindow):
                 
                 # Habilitar controles
                 self.btn_refresh.setEnabled(True)
-                self.btn_buy.setEnabled(True)
-                self.btn_sell.setEnabled(True)
-                self.btn_refresh_positions.setEnabled(True)
                 
                 # Actualizar información de cuenta
-                self.update_account_info()
+                self.update_account_info(result['data'])
+                
+                # Sincronizar controles con los paneles
+                self.sync_ui_with_panels()
                 
                 # Iniciar actualización de precios
                 self.timer_prices.start()
                 self.refresh_data()
                 
                 self.log_message(f"✅ Conectado exitosamente a MT5")
-                # CORREGIDO: Usar ['data'] en lugar de .details
-                self.log_message(f"   Servidor: {result['data'].get('server', 'N/A')}")
-                self.log_message(f"   Cuenta: {result['data'].get('account_info', {}).get('login', 'N/A')}")
+                if 'account_info' in result['data']:
+                    acc_info = result['data']['account_info']
+                    self.log_message(f"   Servidor: {acc_info.get('server', 'N/A')}")
+                    self.log_message(f"   Cuenta: {acc_info.get('login', 'N/A')}")
             else:
-                # CORREGIDO: Usar ['message'] en lugar de .message
                 self.update_connection_status(False, f"❌ Error: {result['message']}")
                 self.log_message(f"❌ Error de conexión: {result['message']}")
                 
@@ -519,9 +282,9 @@ class MainWindow(QMainWindow):
             
             # Deshabilitar controles
             self.btn_refresh.setEnabled(False)
-            self.btn_buy.setEnabled(False)
-            self.btn_sell.setEnabled(False)
-            self.btn_refresh_positions.setEnabled(False)
+            
+            # Actualizar paneles
+            self.control_panel.update_connection_status(False)
             
             self.log_message("🔌 Desconectado de MT5")
     
@@ -540,6 +303,24 @@ class MainWindow(QMainWindow):
             self.btn_connect.setText("🔌 Conectar a MT5")
             self.btn_connect.clicked.disconnect()
             self.btn_connect.clicked.connect(self.connect_to_mt5)
+        
+        # Actualizar panel de control
+        self.control_panel.update_connection_status(connected, message)
+    
+    def update_account_info(self, data):
+        """Actualizar información de cuenta."""
+        try:
+            if 'account_info' in data:
+                acc_info = data['account_info']
+                
+                # Actualizar etiqueta superior
+                self.lbl_account.setText(f"Cuenta: {acc_info.get('login', '--')}")
+                
+                # Pasar información al panel de control
+                self.control_panel.update_account_info(acc_info)
+                
+        except Exception as e:
+            self.log_message(f"⚠️ Error actualizando cuenta: {str(e)}")
     
     # ===== MÉTODOS DE DATOS =====
     
@@ -556,35 +337,39 @@ class MainWindow(QMainWindow):
                 count=100
             )
             
-            # Verificar si es diccionario u objeto
-            if isinstance(result, dict):
-                success = result.get('success', False)
-                data = result.get('data', [])
-                message = result.get('message', '')
-                # quality puede no estar presente
-                quality = result.get('quality', 'UNKNOWN')
-            else:
-                # Si es objeto con atributos
-                success = getattr(result, 'success', False)
-                data = getattr(result, 'data', [])
-                message = getattr(result, 'message', '')
-                quality = getattr(result, 'quality', 'UNKNOWN')
-            
-            if success:
+            if result['success']:
+                data = result['data']
+                symbol_info = result.get('symbol_info')
+                server_time = result.get('server_time')
+                
                 self.log_message(f"📊 Datos obtenidos: {len(data)} velas")
                 
-                # Actualizar información de precios en tiempo real
-                self.update_prices()
+                # Obtener datos en tiempo real para precio actual
+                real_time_result = self.data_use_case.get_real_time_data(self.current_symbol)
+                real_time_data = None
+                if real_time_result['success']:
+                    real_time_data = real_time_result['data']
+                    # Usar la misma información del símbolo y hora del servidor
+                    if not symbol_info:
+                        symbol_info = real_time_result.get('symbol_info')
+                    if not server_time:
+                        server_time = real_time_result.get('server_time')
                 
-                # Aquí iría la actualización del gráfico si tuvieras pyqtgraph
-                # self.update_chart(data)
+                # Actualizar gráfico con TODA la información
+                self.chart_view.update_chart(
+                    data, 
+                    real_time_data,
+                    symbol_info,
+                    server_time
+                )
                 
-                # Actualizar título del gráfico
-                self.lbl_chart_title.setText(f"Gráfico: {self.current_symbol} - {self.current_timeframe} ({len(data)} velas)")
+                # Actualizar precios en el panel de control
+                if real_time_data:
+                    self.control_panel.update_price_display(real_time_data)
                 
-                self.lbl_status_data.setText(f"Datos: {len(data)} velas | Calidad: {quality}")
+                self.lbl_status_data.setText(f"Datos: {len(data)} velas")
             else:
-                self.log_message(f"❌ Error obteniendo datos: {message}")
+                self.log_message(f"❌ Error obteniendo datos: {result['message']}")
                 
         except Exception as e:
             self.log_message(f"❌ Error refrescando datos: {str(e)}")
@@ -598,104 +383,43 @@ class MainWindow(QMainWindow):
             # Obtener datos en tiempo real
             result = self.data_use_case.get_real_time_data(self.current_symbol)
             
-            # Verificar si es diccionario u objeto
-            if isinstance(result, dict):
-                success = result.get('success', False)
-                data = result.get('data', {})
-            else:
-                success = getattr(result, 'success', False)
-                data = getattr(result, 'data', {})
-            
-            if success:
-                # Obtener valores de data de manera segura
-                if isinstance(data, dict):
-                    bid = data.get('bid', 0)
-                    ask = data.get('ask', 0)
-                    spread = data.get('spread', 0)
-                    last_price = data.get('last_price', bid)
-                else:
-                    bid = getattr(data, 'bid', 0)
-                    ask = getattr(data, 'ask', 0)
-                    spread = getattr(data, 'spread', 0)
-                    last_price = getattr(data, 'last_price', bid)
+            if result['success']:
+                data = result['data']
+                symbol_info = result.get('symbol_info')
+                server_time = result.get('server_time')
                 
-                # Actualizar etiquetas
-                self.lbl_bid.setText(f"Bid: {bid:.5f}")
-                self.lbl_ask.setText(f"Ask: {ask:.5f}")
-                self.lbl_spread.setText(f"Spread: {spread:.1f} pips")
-                self.lbl_change.setText(f"Último: {last_price:.5f}")
+                # Actualizar precios en el gráfico
+                self.chart_view.update_price_display(data)
+                
+                # Actualizar precios en el panel de control
+                self.control_panel.update_price_display(data)
+                
+                # Actualizar hora del servidor en el gráfico
+                if server_time:
+                    self.chart_view.server_time = server_time
                 
         except Exception as e:
             self.log_message(f"❌ Error actualizando precios: {str(e)}")
-    
-    def update_account_info(self):
-        """Actualizar información de la cuenta."""
-        if not self.is_connected or not self.mt5_use_case:
-            return
-        
-        try:
-            # Obtener información de cuenta desde el caso de uso
-            result = self.mt5_use_case.connect()  # Esto devuelve un diccionario
-            
-            # CORREGIDO: Usar notación de diccionario
-            if result['success'] and 'account_info' in result['data']:
-                acc_info = result['data']['account_info']
-                
-                # Actualizar etiquetas
-                self.lbl_account.setText(f"Cuenta: {acc_info.get('login', '--')}")
-                self.lbl_balance.setText(f"Balance: ${acc_info.get('balance', 0):.2f}")
-                self.lbl_equity.setText(f"Equity: ${acc_info.get('equity', 0):.2f}")
-                self.lbl_margin.setText(f"Margen: ${acc_info.get('margin', 0):.2f}")
-                
-                # Calcular margen libre
-                margin = acc_info.get('margin', 0)
-                equity = acc_info.get('equity', 0)
-                free_margin = equity - margin if equity > margin else 0
-                self.lbl_free_margin.setText(f"Margen Libre: ${free_margin:.2f}")
-                
-                # Calcular nivel de margen
-                margin_level = (equity / margin * 100) if margin > 0 else 0
-                self.lbl_margin_level.setText(f"Nivel de Margen: {margin_level:.1f}%")
-                
-        except Exception as e:
-            self.log_message(f"❌ Error actualizando cuenta: {str(e)}")
     
     def refresh_positions(self):
         """Actualizar lista de posiciones."""
         if not self.is_connected:
             return
         
-        # Placeholder - necesitarías implementar la obtención de posiciones
-        self.txt_positions.setPlainText("Funcionalidad de posiciones no implementada completamente.\n\n"
-                                       "Requiere completar el repositorio de órdenes MT5.")
+        # Aquí puedes agregar lógica para obtener posiciones reales
+        self.log_message("🔄 Actualizando posiciones...")
     
     # ===== MÉTODOS DE TRADING =====
     
-    def open_position(self, direction):
-        """Abrir una posición (buy/sell)."""
-        if not self.is_connected:
-            QMessageBox.warning(self, "Error", "No hay conexión a MT5")
-            return
-        
-        volume = float(self.cmb_volume.currentText())
-        sl_pips = int(self.spin_sl.currentText())
-        tp_pips = int(self.spin_tp.currentText())
-        
-        # Mostrar confirmación
-        reply = QMessageBox.question(
-            self, "Confirmar Operación",
-            f"¿Abrir posición {direction.upper()}?\n\n"
-            f"Símbolo: {self.current_symbol}\n"
-            f"Volumen: {volume}\n"
-            f"SL: {sl_pips} pips\n"
-            f"TP: {tp_pips} pips",
-            QMessageBox.Yes | QMessageBox.No
-        )
-        
-        if reply == QMessageBox.Yes:
-            self.log_message(f"📤 Enviando orden {direction.upper()} para {self.current_symbol}...")
-            # Aquí iría la lógica real para enviar la orden a MT5
-            # Necesitarías implementar el caso de uso open_position
+    def on_buy_requested(self, order_details):
+        """Manejador para solicitud de compra."""
+        self.log_message(f"📤 Solicitando COMPRA: {order_details}")
+        # Aquí integrarías con el caso de uso open_position
+    
+    def on_sell_requested(self, order_details):
+        """Manejador para solicitud de venta."""
+        self.log_message(f"📤 Solicitando VENTA: {order_details}")
+        # Aquí integrarías con el caso de uso open_position
     
     # ===== MANEJADORES DE EVENTOS =====
     
@@ -703,6 +427,18 @@ class MainWindow(QMainWindow):
         """Manejador para cambio de símbolo."""
         self.current_symbol = symbol
         self.log_message(f"📈 Símbolo cambiado a: {symbol}")
+        
+        # Sincronizar combobox superior
+        self.cmb_symbol.blockSignals(True)
+        self.cmb_symbol.setCurrentText(symbol)
+        self.cmb_symbol.blockSignals(False)
+        
+        # Sincronizar chart view
+        self.chart_view.current_symbol = symbol
+        
+        # Sincronizar control panel
+        self.control_panel.current_symbol = symbol
+        
         if self.is_connected:
             self.refresh_data()
     
@@ -710,21 +446,43 @@ class MainWindow(QMainWindow):
         """Manejador para cambio de timeframe."""
         self.current_timeframe = timeframe
         self.log_message(f"⏰ Timeframe cambiado a: {timeframe}")
+        
+        # Sincronizar combobox superior
+        self.cmb_timeframe.blockSignals(True)
+        self.cmb_timeframe.setCurrentText(timeframe)
+        self.cmb_timeframe.blockSignals(False)
+        
+        # Sincronizar chart view
+        self.chart_view.current_timeframe = timeframe
+        
+        # Sincronizar control panel
+        self.control_panel.cmb_timeframe.blockSignals(True)
+        self.control_panel.cmb_timeframe.setCurrentText(timeframe)
+        self.control_panel.cmb_timeframe.blockSignals(False)
+        
         if self.is_connected:
             self.refresh_data()
+    
+    def sync_ui_with_panels(self):
+        """Sincronizar la UI superior con los paneles."""
+        # Sincronizar símbolo
+        self.cmb_symbol.blockSignals(True)
+        self.cmb_symbol.setCurrentText(self.chart_view.current_symbol)
+        self.cmb_symbol.blockSignals(False)
+        
+        # Sincronizar timeframe
+        self.cmb_timeframe.blockSignals(True)
+        self.cmb_timeframe.setCurrentText(self.chart_view.current_timeframe)
+        self.cmb_timeframe.blockSignals(False)
     
     # ===== UTILIDADES =====
     
     def log_message(self, message):
         """Agregar mensaje a los logs."""
-        from datetime import datetime
         timestamp = datetime.now().strftime("%H:%M:%S")
         log_entry = f"[{timestamp}] {message}"
         
-        # Log principal
-        self.txt_logs.append(log_entry)
-        
-        # Mini log (solo últimos mensajes)
+        # Mini log
         self.txt_mini_log.append(log_entry)
         
         # Mantener mini log limitado
@@ -733,7 +491,7 @@ class MainWindow(QMainWindow):
             self.txt_mini_log.setPlainText('\n'.join(lines[-10:]))
         
         # Auto-scroll
-        scrollbar = self.txt_logs.verticalScrollBar()
+        scrollbar = self.txt_mini_log.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
     
     def closeEvent(self, event):
@@ -753,3 +511,23 @@ class MainWindow(QMainWindow):
                 event.ignore()
         else:
             event.accept()
+
+
+# Función para ejecutar la aplicación
+def run_application():
+    """Ejecutar la aplicación."""
+    from PyQt5.QtWidgets import QApplication
+    
+    app = QApplication(sys.argv)
+    app.setStyle('Fusion')
+    
+    # Crear y mostrar ventana principal
+    window = MainWindow()
+    window.show()
+    
+    # Ejecutar aplicación
+    sys.exit(app.exec_())
+
+
+if __name__ == "__main__":
+    run_application()

@@ -1,6 +1,6 @@
 # src/domain/value_objects/timeframe.py
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import timedelta
 
 
@@ -82,6 +82,22 @@ class TimeFrame(Enum):
         return self.value
     
     @property
+    def ui_name(self) -> str:
+        """Nombre para uso en UI (formato más común)."""
+        ui_names = {
+            TimeFrame.M1: "1M",
+            TimeFrame.M5: "5M",
+            TimeFrame.M15: "15M",
+            TimeFrame.M30: "30M",
+            TimeFrame.H1: "1H",
+            TimeFrame.H4: "4H",
+            TimeFrame.D1: "1D",
+            TimeFrame.W1: "1W",
+            TimeFrame.MN1: "1MN"
+        }
+        return ui_names[self]
+    
+    @property
     def candles_per_day(self) -> int:
         """Número de velas por día (aproximado)."""
         if self == TimeFrame.M1:
@@ -110,27 +126,86 @@ class TimeFrame(Enum):
         Crea un TimeFrame desde string.
         
         Args:
-            value: String como "M1", "H1", "D1", etc.
+            value: String como "M1", "1H", "D1", etc.
         
         Returns:
             Instancia de TimeFrame
-        """
-        value = value.upper()
         
-        # Mapeo de valores comunes
+        Raises:
+            ValueError: Si el timeframe no es válido
+        """
+        if not value:
+            raise ValueError("El valor del timeframe no puede estar vacío")
+        
+        value = value.upper().strip()
+        
+        # Mapeo de valores comunes con tolerancia
         mapping = {
+            # Formato estándar
+            'M1': 'M1', 'M5': 'M5', 'M15': 'M15', 'M30': 'M30',
+            'H1': 'H1', 'H4': 'H4', 'D1': 'D1', 'W1': 'W1', 'MN1': 'MN1',
+            
+            # Formato UI común
             '1M': 'M1', '5M': 'M5', '15M': 'M15', '30M': 'M30',
             '1H': 'H1', '4H': 'H4', '1D': 'D1', '1W': 'W1', '1MN': 'MN1',
-            'M': 'M1', 'H': 'H1', 'D': 'D1', 'W': 'W1', 'MN': 'MN1'
+            
+            # Formato corto
+            'M': 'M1', 'H': 'H1', 'D': 'D1', 'W': 'W1', 'MN': 'MN1',
+            
+            # Formato MetaTrader
+            'TIMEFRAME_M1': 'M1', 'TIMEFRAME_M5': 'M5', 'TIMEFRAME_M15': 'M15',
+            'TIMEFRAME_M30': 'M30', 'TIMEFRAME_H1': 'H1', 'TIMEFRAME_H4': 'H4',
+            'TIMEFRAME_D1': 'D1', 'TIMEFRAME_W1': 'W1', 'TIMEFRAME_MN1': 'MN1',
+            
+            # Nombres completos
+            'MINUTE1': 'M1', 'MINUTE5': 'M5', 'MINUTE15': 'M15', 'MINUTE30': 'M30',
+            'HOUR1': 'H1', 'HOUR4': 'H4', 'DAY1': 'D1', 'WEEK1': 'W1', 'MONTH1': 'MN1'
         }
         
+        # Normalizar el valor
         normalized = mapping.get(value, value)
         
         try:
             return cls(normalized)
         except ValueError:
-            raise ValueError(f"TimeFrame '{value}' no válido. "
-                           f"Usar: {', '.join([tf.value for tf in cls])}")
+            # Lista de valores válidos para el mensaje de error
+            valid_values = [tf.value for tf in cls]
+            valid_ui_values = [tf.ui_name for tf in cls]
+            raise ValueError(
+                f"TimeFrame '{value}' no válido.\n"
+                f"Valores válidos (estándar): {', '.join(valid_values)}\n"
+                f"Valores válidos (UI): {', '.join(valid_ui_values)}\n"
+                f"Se aceptan también: 1M, 5M, 1H, 4H, 1D, 1W, 1MN"
+            )
+    
+    @classmethod
+    def from_ui_string(cls, ui_value: str) -> 'TimeFrame':
+        """
+        Crea un TimeFrame desde string de UI.
+        
+        Args:
+            ui_value: String como "1M", "1H", "4H", etc.
+        
+        Returns:
+            Instancia de TimeFrame
+        """
+        ui_mapping = {
+            "1M": cls.M1,
+            "5M": cls.M5,
+            "15M": cls.M15,
+            "30M": cls.M30,
+            "1H": cls.H1,
+            "4H": cls.H4,
+            "1D": cls.D1,
+            "1W": cls.W1,
+            "1MN": cls.MN1
+        }
+        
+        if ui_value in ui_mapping:
+            return ui_mapping[ui_value]
+        
+        # Si no está en el mapeo, intenta con el método general
+        return cls.from_string(ui_value)
     
     @classmethod
     def from_minutes(cls, minutes: int) -> Optional['TimeFrame']:
@@ -163,8 +238,17 @@ class TimeFrame(Enum):
         
         Returns:
             Constante MT5_TIMEFRAME
+        
+        Raises:
+            ImportError: Si MetaTrader5 no está instalado
         """
-        import MetaTrader5 as mt5
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            raise ImportError(
+                "MetaTrader5 no está instalado. "
+                "Instala con: pip install MetaTrader5"
+            )
         
         mapping = {
             TimeFrame.M1: mt5.TIMEFRAME_M1,
@@ -178,7 +262,13 @@ class TimeFrame(Enum):
             TimeFrame.MN1: mt5.TIMEFRAME_MN1
         }
         
-        return mapping.get(self, mt5.TIMEFRAME_H1)
+        mt5_tf = mapping.get(self, mt5.TIMEFRAME_H1)
+        
+        # Validación adicional
+        if not hasattr(mt5, 'TIMEFRAME_H1'):
+            raise ValueError("Las constantes de timeframe de MT5 no están disponibles")
+        
+        return mt5_tf
     
     @classmethod
     def from_mt5_timeframe(cls, mt5_timeframe: int) -> 'TimeFrame':
@@ -191,7 +281,13 @@ class TimeFrame(Enum):
         Returns:
             Instancia de TimeFrame
         """
-        import MetaTrader5 as mt5
+        try:
+            import MetaTrader5 as mt5
+        except ImportError:
+            raise ImportError(
+                "MetaTrader5 no está instalado. "
+                "Instala con: pip install MetaTrader5"
+            )
         
         mapping = {
             mt5.TIMEFRAME_M1: cls.M1,
@@ -205,7 +301,19 @@ class TimeFrame(Enum):
             mt5.TIMEFRAME_MN1: cls.MN1
         }
         
-        return mapping.get(mt5_timeframe, cls.H1)
+        if mt5_timeframe in mapping:
+            return mapping[mt5_timeframe]
+        
+        # Si no está en el mapeo, intenta encontrar el más cercano
+        for tf_enum in cls:
+            try:
+                if tf_enum.to_mt5_timeframe() == mt5_timeframe:
+                    return tf_enum
+            except:
+                continue
+        
+        # Por defecto, retorna H1
+        return cls.H1
     
     def get_higher_timeframe(self) -> Optional['TimeFrame']:
         """Retorna el timeframe inmediatamente superior."""
@@ -214,9 +322,13 @@ class TimeFrame(Enum):
             TimeFrame.H1, TimeFrame.H4, TimeFrame.D1, TimeFrame.W1, TimeFrame.MN1
         ]
         
-        index = order.index(self) if self in order else -1
-        if index < len(order) - 1:
-            return order[index + 1]
+        try:
+            index = order.index(self)
+            if index < len(order) - 1:
+                return order[index + 1]
+        except ValueError:
+            pass
+        
         return None
     
     def get_lower_timeframe(self) -> Optional['TimeFrame']:
@@ -226,9 +338,13 @@ class TimeFrame(Enum):
             TimeFrame.H1, TimeFrame.H4, TimeFrame.D1, TimeFrame.W1, TimeFrame.MN1
         ]
         
-        index = order.index(self) if self in order else -1
-        if index > 0:
-            return order[index - 1]
+        try:
+            index = order.index(self)
+            if index > 0:
+                return order[index - 1]
+        except ValueError:
+            pass
+        
         return None
     
     def is_multiple_of(self, other: 'TimeFrame') -> bool:
@@ -241,7 +357,10 @@ class TimeFrame(Enum):
         Returns:
             True si es múltiplo
         """
-        return self.duration_minutes % other.duration_minutes == 0
+        try:
+            return self.duration_minutes % other.duration_minutes == 0
+        except:
+            return False
     
     def calculate_candle_count(
         self, 
@@ -278,6 +397,7 @@ class TimeFrame(Enum):
         return {
             'value': self.value,
             'display_name': self.display_name,
+            'ui_name': self.ui_name,
             'duration_minutes': self.duration_minutes,
             'is_intraday': self.is_intraday,
             'candles_per_day': self.candles_per_day,
@@ -285,7 +405,7 @@ class TimeFrame(Enum):
         }
     
     @classmethod
-    def all_timeframes(cls) -> list['TimeFrame']:
+    def all_timeframes(cls) -> List['TimeFrame']:
         """Retorna todos los timeframes en orden."""
         return [
             cls.M1, cls.M5, cls.M15, cls.M30,
@@ -293,11 +413,61 @@ class TimeFrame(Enum):
         ]
     
     @classmethod
-    def intraday_timeframes(cls) -> list['TimeFrame']:
+    def intraday_timeframes(cls) -> List['TimeFrame']:
         """Retorna solo timeframes intraday."""
         return [tf for tf in cls.all_timeframes() if tf.is_intraday]
     
     @classmethod
-    def daily_plus_timeframes(cls) -> list['TimeFrame']:
+    def daily_plus_timeframes(cls) -> List['TimeFrame']:
         """Retorna timeframes diarios y mayores."""
         return [tf for tf in cls.all_timeframes() if tf.is_daily_or_higher]
+    
+    @classmethod
+    def get_for_ui(cls) -> List[Dict[str, str]]:
+        """Retorna lista de timeframes para usar en UI."""
+        return [
+            {'value': tf.ui_name, 'display': tf.display_name}
+            for tf in cls.all_timeframes()
+        ]
+    
+    @classmethod
+    def validate_timeframe(cls, value: Any) -> bool:
+        """Valida si un valor es un timeframe válido."""
+        if isinstance(value, cls):
+            return True
+        
+        if isinstance(value, str):
+            try:
+                cls.from_string(value)
+                return True
+            except ValueError:
+                return False
+        
+        return False
+
+
+def get_timeframe_mapping() -> Dict[str, str]:
+    """
+    Retorna el mapeo completo de timeframes.
+    
+    Returns:
+        Diccionario con todos los mapeos
+    """
+    return {
+        # Formato estándar
+        'M1': 'M1', 'M5': 'M5', 'M15': 'M15', 'M30': 'M30',
+        'H1': 'H1', 'H4': 'H4', 'D1': 'D1', 'W1': 'W1', 'MN1': 'MN1',
+        
+        # Formato UI
+        '1M': 'M1', '5M': 'M5', '15M': 'M15', '30M': 'M30',
+        '1H': 'H1', '4H': 'H4', '1D': 'D1', '1W': 'W1', '1MN': 'MN1',
+        
+        # MT5
+        'TIMEFRAME_M1': 'M1', 'TIMEFRAME_M5': 'M5', 'TIMEFRAME_M15': 'M15',
+        'TIMEFRAME_M30': 'M30', 'TIMEFRAME_H1': 'H1', 'TIMEFRAME_H4': 'H4',
+        'TIMEFRAME_D1': 'D1', 'TIMEFRAME_W1': 'W1', 'TIMEFRAME_MN1': 'MN1',
+    }
+
+
+# Alias para acceso rápido
+MT5TimeFrame = TimeFrame  # Para compatibilidad

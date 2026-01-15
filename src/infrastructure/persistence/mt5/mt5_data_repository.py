@@ -5,8 +5,8 @@ from typing import Optional, List, Dict, Any, Tuple
 import MetaTrader5 as mt5
 import pandas as pd
 
-from src.config.settings import DEFAULT_SYMBOL, DEFAULT_TIMEFRAME, DEFAULT_DATA_COUNT
-from src.config.constants import get_mt5_timeframe
+from src.config.settings import DEFAULT_SYMBOL, DEFAULT_DATA_COUNT
+from src.domain.value_objects.timeframe import TimeFrame
 from src.domain.entities.candle import Candle
 from src.domain.repositories.abstract.market_data_repository import MarketDataRepository
 
@@ -21,7 +21,6 @@ class MT5DataRepository(MarketDataRepository):
     def _ensure_connection(self) -> bool:
         """Asegura que haya una conexión activa a MT5."""
         try:
-            # Intentar inicializar si no está inicializado
             if not self._initialized:
                 if not mt5.initialize():
                     return False
@@ -30,7 +29,6 @@ class MT5DataRepository(MarketDataRepository):
             account_info = mt5.account_info()
             return account_info is not None
         except:
-            # Intentar inicializar
             try:
                 if mt5.initialize():
                     self._initialized = True
@@ -38,6 +36,16 @@ class MT5DataRepository(MarketDataRepository):
             except:
                 pass
             return False
+    
+    def _convert_timeframe_to_mt5(self, timeframe_str: str) -> int:
+        """
+        Convierte un string de timeframe a constante MT5.
+        """
+        try:
+            timeframe = TimeFrame.from_string(timeframe_str)
+            return timeframe.to_mt5_timeframe()
+        except:
+            return mt5.TIMEFRAME_H1
     
     def _mt5_to_candle(self, mt5_rate: tuple) -> Optional[Candle]:
         """Convierte una tupla de datos de MT5 a una entidad Candle."""
@@ -50,8 +58,7 @@ class MT5DataRepository(MarketDataRepository):
                 close=float(mt5_rate[4]),
                 volume=int(mt5_rate[5])
             )
-        except Exception as e:
-            print(f"Error convirtiendo candle: {e}")
+        except:
             return None
     
     def initialize(self) -> bool:
@@ -61,11 +68,28 @@ class MT5DataRepository(MarketDataRepository):
                 return False
             self._initialized = True
             return True
-        except Exception as e:
-            print(f"Error inicializando MT5: {e}")
+        except:
             return False
     
-    # MÉTODO NUEVO: get_candles (para compatibilidad con fetch_market_data.py)
+    def get_server_time(self) -> Optional[datetime]:
+        """Obtiene la hora del servidor MT5."""
+        if not self._ensure_connection():
+            return None
+        
+        try:
+            # MT5 no tiene un método directo para obtener la hora del servidor
+            # Usamos el timestamp del último tick disponible como aproximación
+            tick = mt5.symbol_info_tick("EURUSD")
+            if tick and hasattr(tick, 'time'):
+                # tick.time está en segundos desde epoch
+                return datetime.fromtimestamp(tick.time)
+            
+            # Fallback: usar hora actual
+            return datetime.now()
+        except Exception as e:
+            print(f"Error obteniendo hora del servidor: {e}")
+            return None
+    
     def get_candles(
         self,
         symbol: str,
@@ -74,15 +98,13 @@ class MT5DataRepository(MarketDataRepository):
         from_date: Optional[datetime] = None,
         to_date: Optional[datetime] = None
     ) -> List[Candle]:
-        """Obtiene velas desde MT5 - Compatibilidad con fetch_market_data.py."""
+        """Obtiene velas desde MT5."""
         if not self._ensure_connection():
             return []
         
         try:
-            # Convertir timeframe a formato MT5
-            mt5_timeframe = get_mt5_timeframe(timeframe)
+            mt5_timeframe = self._convert_timeframe_to_mt5(timeframe)
             
-            # Obtener datos de MT5 según los parámetros
             if from_date and to_date:
                 rates = mt5.copy_rates_range(symbol, mt5_timeframe, from_date, to_date)
             elif from_date:
@@ -91,30 +113,26 @@ class MT5DataRepository(MarketDataRepository):
                 rates = mt5.copy_rates_from_pos(symbol, mt5_timeframe, 0, count)
             
             if rates is None or len(rates) == 0:
-                print(f"No se pudieron obtener datos para {symbol} - {timeframe}")
                 return []
             
-            # Convertir a lista de Candle
             candles = []
             for rate in rates:
                 candle = self._mt5_to_candle(rate)
                 if candle:
                     candles.append(candle)
             
+            candles.sort(key=lambda x: x.timestamp)
             return candles
             
-        except Exception as e:
-            print(f"Error en get_candles: {e}")
+        except:
             return []
     
     def get_historical_data(self, symbol: str, timeframe: str, count: int = None,
                            start_date: datetime = None, end_date: datetime = None) -> Tuple[Optional[List[Candle]], Any]:
         """Obtiene datos históricos de mercado."""
-        # Usar get_candles internamente
         if not self._ensure_connection():
             return None, "No hay conexión"
         
-        # Usar valores por defecto si no se especifican
         if count is None:
             count = DEFAULT_DATA_COUNT
         
@@ -133,7 +151,6 @@ class MT5DataRepository(MarketDataRepository):
             return candles, "OK"
             
         except Exception as e:
-            print(f"Error en get_historical_data: {str(e)}")
             return None, str(e)
     
     def get_current_tick(self, symbol: str) -> Optional[Dict[str, Any]]:
@@ -154,8 +171,7 @@ class MT5DataRepository(MarketDataRepository):
                 'time': datetime.fromtimestamp(symbol_info.time)
             }
             
-        except Exception as e:
-            print(f"Error en get_current_tick: {e}")
+        except:
             return None
     
     def get_current_price(self, symbol: str) -> Optional[Dict[str, float]]:
@@ -180,7 +196,6 @@ class MT5DataRepository(MarketDataRepository):
             if info is None:
                 return None
             
-            # Extraer información relevante
             return {
                 'name': info.name,
                 'point': info.point,
@@ -191,8 +206,7 @@ class MT5DataRepository(MarketDataRepository):
                 'margin_rate': info.margin_rate
             }
             
-        except Exception as e:
-            print(f"Error en get_symbol_info: {e}")
+        except:
             return None
     
     def get_available_symbols(self) -> List[str]:
@@ -206,17 +220,15 @@ class MT5DataRepository(MarketDataRepository):
             if symbols is None:
                 return []
             
-            # Filtrar solo símbolos activos
             active_symbols = []
             for symbol in symbols:
                 if hasattr(symbol, 'visible') and symbol.visible:
-                    if hasattr(symbol, 'trade_mode') and symbol.trade_mode == 0:  # TRADE_MODE_FULL
+                    if hasattr(symbol, 'trade_mode') and symbol.trade_mode == 0:
                         active_symbols.append(symbol.name)
             
             return sorted(active_symbols)
             
-        except Exception as e:
-            print(f"Error en get_available_symbols: {e}")
+        except:
             return []
     
     def disconnect(self):
@@ -228,7 +240,6 @@ class MT5DataRepository(MarketDataRepository):
         self._initialized = False
 
 
-# Función factory para crear el repositorio
 def create_mt5_data_repository() -> MT5DataRepository:
     """Crea y retorna una instancia de MT5DataRepository."""
     return MT5DataRepository()
