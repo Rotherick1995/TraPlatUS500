@@ -26,7 +26,7 @@ class ControlPanel(QWidget):
         
         # Estado
         self.is_connected = False
-        self.current_symbol = "EURUSD"
+        self.current_symbol = "US500"
         self.account_info = {}
         self.positions = []
         

@@ -3,7 +3,7 @@ import sys
 import os
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QComboBox, QTextEdit, QTabWidget,
-                             QSplitter, QGroupBox, QGridLayout, QMessageBox)
+                             QSplitter, QGroupBox, QGridLayout, QMessageBox,QFrame)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QPalette
 import pyqtgraph as pg
@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         self.is_connected = False
         self.current_symbol = settings.DEFAULT_SYMBOL
         self.current_timeframe = "H1"
+        self.server_name = "No conectado"
         
         # Configurar UI
         self.setup_ui()
@@ -43,7 +44,7 @@ class MainWindow(QMainWindow):
     
     def setup_ui(self):
         """Configurar la interfaz de usuario."""
-        self.setWindowTitle("US500 Trading Platform")
+        self.setWindowTitle("Rotherick's Trading Platform")
         self.setGeometry(100, 100, 1400, 800)
         
         # Tema oscuro
@@ -58,11 +59,15 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(5)
         
-        # 1. Barra superior (conexión y símbolos)
+        # 1. Cabecera con título y estado de conexión
+        header_layout = self.create_header()
+        main_layout.addLayout(header_layout)
+        
+        # 2. Barra superior simplificada
         top_bar = self.create_top_bar()
         main_layout.addLayout(top_bar)
         
-        # 2. Área principal dividida
+        # 3. Área principal dividida
         splitter = QSplitter(Qt.Horizontal)
         
         # Panel izquierdo (gráfico) - Usar ChartView personalizado
@@ -91,7 +96,7 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(splitter)
         
-        # 3. Barra inferior (logs)
+        # 4. Barra inferior (logs)
         self.txt_mini_log = QTextEdit()
         self.txt_mini_log.setMaximumHeight(100)
         self.txt_mini_log.setReadOnly(True)
@@ -109,8 +114,34 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(self.txt_mini_log)
         
-        # 4. Barra de estado
+        # 5. Barra de estado
         self.setup_status_bar()
+    
+    def create_header(self):
+        """Crear cabecera con título grande."""
+        header_layout = QVBoxLayout()
+        header_layout.setSpacing(5)
+        
+        # Título principal
+        title_label = QLabel("Rotherick's Trading Platform")
+        title_font = QFont()
+        title_font.setPointSize(24)
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setStyleSheet("color: #ffffff; padding: 5px;")
+        title_label.setAlignment(Qt.AlignCenter)
+        
+        # Línea separadora
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setStyleSheet("background-color: #444; margin: 5px 0px;")
+        separator.setMaximumHeight(2)
+        
+        header_layout.addWidget(title_label)
+        header_layout.addWidget(separator)
+        
+        return header_layout
     
     def set_dark_theme(self):
         """Aplicar tema oscuro a la aplicación."""
@@ -132,7 +163,7 @@ class MainWindow(QMainWindow):
         self.setPalette(dark_palette)
     
     def create_top_bar(self):
-        """Crear barra superior con controles de conexión."""
+        """Crear barra superior simplificada."""
         layout = QHBoxLayout()
         
         # Botón de conexión
@@ -150,46 +181,69 @@ class MainWindow(QMainWindow):
             QPushButton:hover {
                 background-color: #3a92ea;
             }
+            QPushButton:disabled {
+                background-color: #666;
+            }
         """)
         
         # Estado de conexión
         self.lbl_connection_status = QLabel("❌ Desconectado")
         self.lbl_connection_status.setStyleSheet("font-weight: bold; color: #ff6b6b;")
         
-        # Selector de símbolo (sincronizado con chart_view)
-        self.cmb_symbol = QComboBox()
-        self.cmb_symbol.addItems(["EURUSD", "US500", "GBPUSD", "USDJPY", "XAUUSD"])
-        self.cmb_symbol.setCurrentText(self.current_symbol)
-        self.cmb_symbol.currentTextChanged.connect(self.on_symbol_changed)
-        self.cmb_symbol.setFixedWidth(100)
+        # Información del servidor
+        server_group = QWidget()
+        server_layout = QVBoxLayout(server_group)
+        server_layout.setContentsMargins(0, 0, 0, 0)
         
-        # Selector de timeframe (sincronizado con chart_view)
-        self.cmb_timeframe = QComboBox()
-        self.cmb_timeframe.addItems(["M1", "M5", "M15", "M30", "H1", "H4", "D1"])
-        self.cmb_timeframe.setCurrentText(self.current_timeframe)
-        self.cmb_timeframe.currentTextChanged.connect(self.on_timeframe_changed)
-        self.cmb_timeframe.setFixedWidth(80)
+        self.lbl_server_label = QLabel("Servidor:")
+        self.lbl_server_label.setStyleSheet("color: #aaa; font-size: 11px;")
         
-        # Botón de actualizar
-        self.btn_refresh = QPushButton("🔄 Actualizar")
-        self.btn_refresh.clicked.connect(self.refresh_data)
-        self.btn_refresh.setEnabled(False)
+        self.lbl_server_name = QLabel("No conectado")
+        self.lbl_server_name.setStyleSheet("font-weight: bold; color: #4cd964; font-size: 12px;")
         
-        # Etiqueta de cuenta
-        self.lbl_account = QLabel("Cuenta: --")
-        self.lbl_account.setStyleSheet("color: #aaa;")
+        server_layout.addWidget(self.lbl_server_label)
+        server_layout.addWidget(self.lbl_server_name)
+        
+        # Información de cuenta
+        account_group = QWidget()
+        account_layout = QVBoxLayout(account_group)
+        account_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.lbl_account_label = QLabel("Cuenta:")
+        self.lbl_account_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        
+        self.lbl_account_info = QLabel("--")
+        self.lbl_account_info.setStyleSheet("font-weight: bold; color: #ffa500; font-size: 12px;")
+        
+        account_layout.addWidget(self.lbl_account_label)
+        account_layout.addWidget(self.lbl_account_info)
+        
+        # Separador
+        separator1 = QFrame()
+        separator1.setFrameShape(QFrame.VLine)
+        separator1.setFrameShadow(QFrame.Sunken)
+        separator1.setStyleSheet("background-color: #444;")
+        separator1.setMaximumWidth(2)
+        
+        separator2 = QFrame()
+        separator2.setFrameShape(QFrame.VLine)
+        separator2.setFrameShadow(QFrame.Sunken)
+        separator2.setStyleSheet("background-color: #444;")
+        separator2.setMaximumWidth(2)
+        
+        # Versión/estado
+        self.lbl_status_info = QLabel("Versión 1.0 | Modo: Demo")
+        self.lbl_status_info.setStyleSheet("color: #aaa; font-size: 11px;")
         
         # Agregar widgets al layout
         layout.addWidget(self.btn_connect)
         layout.addWidget(self.lbl_connection_status)
-        layout.addSpacing(20)
-        layout.addWidget(QLabel("Símbolo:"))
-        layout.addWidget(self.cmb_symbol)
-        layout.addWidget(QLabel("TF:"))
-        layout.addWidget(self.cmb_timeframe)
-        layout.addWidget(self.btn_refresh)
+        layout.addWidget(separator1)
+        layout.addWidget(server_group)
+        layout.addWidget(separator2)
+        layout.addWidget(account_group)
         layout.addStretch()
-        layout.addWidget(self.lbl_account)
+        layout.addWidget(self.lbl_status_info)
         
         return layout
     
@@ -199,7 +253,10 @@ class MainWindow(QMainWindow):
         
         # Etiquetas de estado
         self.lbl_status_data = QLabel("Datos: Esperando conexión")
+        self.lbl_status_data.setStyleSheet("color: #aaa;")
+        
         self.lbl_status_time = QLabel("--:--:--")
+        self.lbl_status_time.setStyleSheet("color: #0af; font-weight: bold;")
         
         self.statusBar().addPermanentWidget(self.lbl_status_data)
         self.statusBar().addPermanentWidget(self.lbl_status_time)
@@ -238,15 +295,24 @@ class MainWindow(QMainWindow):
             
             if result['success']:
                 self.is_connected = True
-                self.update_connection_status(True, "✅ Conectado a MT5")
+                
+                # Obtener información del servidor
+                server_info = "Desconocido"
+                if 'server_info' in result['data']:
+                    server_info = result['data']['server_info']
+                elif 'account_info' in result['data']:
+                    account_info = result['data']['account_info']
+                    server_info = account_info.get('server', 'Desconocido')
+                
+                self.server_name = server_info
+                
+                # Actualizar UI de conexión
+                self.update_connection_status(True, f"✅ Conectado a {server_info}")
                 
                 # Crear caso de uso de datos
                 self.data_use_case = create_fetch_market_data_use_case(self.mt5_use_case)
                 
-                # Habilitar controles
-                self.btn_refresh.setEnabled(True)
-                
-                # Actualizar información de cuenta
+                # Actualizar información de cuenta y servidor
                 self.update_account_info(result['data'])
                 
                 # Sincronizar controles con los paneles
@@ -257,10 +323,11 @@ class MainWindow(QMainWindow):
                 self.refresh_data()
                 
                 self.log_message(f"✅ Conectado exitosamente a MT5")
+                self.log_message(f"   Servidor: {server_info}")
                 if 'account_info' in result['data']:
                     acc_info = result['data']['account_info']
-                    self.log_message(f"   Servidor: {acc_info.get('server', 'N/A')}")
                     self.log_message(f"   Cuenta: {acc_info.get('login', 'N/A')}")
+                    self.log_message(f"   Nombre: {acc_info.get('name', 'N/A')}")
             else:
                 self.update_connection_status(False, f"❌ Error: {result['message']}")
                 self.log_message(f"❌ Error de conexión: {result['message']}")
@@ -277,11 +344,17 @@ class MainWindow(QMainWindow):
         if self.mt5_use_case:
             self.mt5_use_case.disconnect()
             self.is_connected = False
+            self.server_name = "No conectado"
             self.update_connection_status(False, "❌ Desconectado")
             self.timer_prices.stop()
             
-            # Deshabilitar controles
-            self.btn_refresh.setEnabled(False)
+            # Actualizar información del servidor
+            self.lbl_server_name.setText("No conectado")
+            self.lbl_server_name.setStyleSheet("font-weight: bold; color: #ff6b6b; font-size: 12px;")
+            
+            # Actualizar información de cuenta
+            self.lbl_account_info.setText("--")
+            self.lbl_account_info.setStyleSheet("font-weight: bold; color: #aaa; font-size: 12px;")
             
             # Actualizar paneles
             self.control_panel.update_connection_status(False)
@@ -298,11 +371,24 @@ class MainWindow(QMainWindow):
             self.btn_connect.setText("🔌 Desconectar")
             self.btn_connect.clicked.disconnect()
             self.btn_connect.clicked.connect(self.disconnect_from_mt5)
+            
+            # Actualizar información del servidor
+            self.lbl_server_name.setText(self.server_name)
+            self.lbl_server_name.setStyleSheet("font-weight: bold; color: #4cd964; font-size: 12px;")
+            
+            # Actualizar modo
+            if "demo" in self.server_name.lower():
+                self.lbl_status_info.setText("Versión 1.0 | Modo: Demo")
+            elif "real" in self.server_name.lower() or "live" in self.server_name.lower():
+                self.lbl_status_info.setText("Versión 1.0 | Modo: Real")
+            else:
+                self.lbl_status_info.setText("Versión 1.0 | Modo: Desconocido")
         else:
             self.lbl_connection_status.setStyleSheet("font-weight: bold; color: #ff6b6b;")
             self.btn_connect.setText("🔌 Conectar a MT5")
             self.btn_connect.clicked.disconnect()
             self.btn_connect.clicked.connect(self.connect_to_mt5)
+            self.lbl_status_info.setText("Versión 1.0 | Modo: Desconectado")
         
         # Actualizar panel de control
         self.control_panel.update_connection_status(connected, message)
@@ -313,14 +399,27 @@ class MainWindow(QMainWindow):
             if 'account_info' in data:
                 acc_info = data['account_info']
                 
-                # Actualizar etiqueta superior
-                self.lbl_account.setText(f"Cuenta: {acc_info.get('login', '--')}")
+                # Formatear información de cuenta
+                account_number = str(acc_info.get('login', '--'))
+                account_name = str(acc_info.get('name', 'Sin nombre'))
+                account_type = "Demo" if acc_info.get('trade_mode', 0) == 0 else "Real"
+                
+                # Limitar longitud del nombre si es muy largo
+                if len(account_name) > 20:
+                    account_name = account_name[:17] + "..."
+                
+                # Actualizar etiquetas
+                account_text = f"{account_number} - {account_type}"
+                self.lbl_account_info.setText(account_text)
+                self.lbl_account_info.setStyleSheet("font-weight: bold; color: #ffa500; font-size: 12px;")
                 
                 # Pasar información al panel de control
                 self.control_panel.update_account_info(acc_info)
                 
         except Exception as e:
             self.log_message(f"⚠️ Error actualizando cuenta: {str(e)}")
+            self.lbl_account_info.setText("Error")
+            self.lbl_account_info.setStyleSheet("font-weight: bold; color: #ff6b6b; font-size: 12px;")
     
     # ===== MÉTODOS DE DATOS =====
     
@@ -428,11 +527,6 @@ class MainWindow(QMainWindow):
         self.current_symbol = symbol
         self.log_message(f"📈 Símbolo cambiado a: {symbol}")
         
-        # Sincronizar combobox superior
-        self.cmb_symbol.blockSignals(True)
-        self.cmb_symbol.setCurrentText(symbol)
-        self.cmb_symbol.blockSignals(False)
-        
         # Sincronizar chart view
         self.chart_view.current_symbol = symbol
         
@@ -447,11 +541,6 @@ class MainWindow(QMainWindow):
         self.current_timeframe = timeframe
         self.log_message(f"⏰ Timeframe cambiado a: {timeframe}")
         
-        # Sincronizar combobox superior
-        self.cmb_timeframe.blockSignals(True)
-        self.cmb_timeframe.setCurrentText(timeframe)
-        self.cmb_timeframe.blockSignals(False)
-        
         # Sincronizar chart view
         self.chart_view.current_timeframe = timeframe
         
@@ -465,15 +554,8 @@ class MainWindow(QMainWindow):
     
     def sync_ui_with_panels(self):
         """Sincronizar la UI superior con los paneles."""
-        # Sincronizar símbolo
-        self.cmb_symbol.blockSignals(True)
-        self.cmb_symbol.setCurrentText(self.chart_view.current_symbol)
-        self.cmb_symbol.blockSignals(False)
-        
-        # Sincronizar timeframe
-        self.cmb_timeframe.blockSignals(True)
-        self.cmb_timeframe.setCurrentText(self.chart_view.current_timeframe)
-        self.cmb_timeframe.blockSignals(False)
+        # No es necesario sincronizar controles removidos
+        pass
     
     # ===== UTILIDADES =====
     
