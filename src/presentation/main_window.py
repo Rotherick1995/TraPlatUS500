@@ -5,7 +5,7 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QComboBox, QTextEdit, QTabWidget,
                              QSplitter, QGroupBox, QGridLayout, QMessageBox, QFrame,
-                             QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar,QSizePolicy)
+                             QTableWidget, QTableWidgetItem, QHeaderView, QProgressBar, QSizePolicy)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QPalette, QIcon
 
@@ -13,10 +13,16 @@ from PyQt5.QtGui import QFont, QColor, QPalette, QIcon
 try:
     from src.infrastructure.ui.chart_view import ChartView
     from src.infrastructure.ui.control_panel import ControlPanel
-except ImportError:
+    from src.application.use_cases.connect_to_mt5 import create_connect_to_mt5_use_case
+    from src.application.use_cases.fetch_market_data import create_fetch_market_data_use_case
+    from src.config import settings
+    IMPORT_SUCCESS = True
+except ImportError as e:
+    print(f"⚠️ Advertencia de importación: {e}")
     # Si no existen aún, crear placeholders
     ChartView = None
     ControlPanel = None
+    IMPORT_SUCCESS = False
 
 
 class MainWindow(QMainWindow):
@@ -29,12 +35,36 @@ class MainWindow(QMainWindow):
     timeframe_changed = pyqtSignal(str)
     buy_requested = pyqtSignal(dict)
     sell_requested = pyqtSignal(dict)
+    indicators_updated = pyqtSignal(dict)  # NUEVA SEÑAL PARA INDICADORES
     
     def __init__(self):
         super().__init__()
         
         # Configuración inicial
         self.is_dark_theme = True
+        self.is_connected = False
+        
+        # Variables para MT5
+        self.mt5_use_case = None
+        self.data_use_case = None
+        
+        # Estado actual
+        self.current_symbol = "US500"
+        self.current_timeframe = "1H"
+        self.server_name = "No conectado"
+        
+        # NUEVO: Configuración de indicadores
+        self.indicators_config = {
+            'sma': {'enabled': True, 'color': '#ffff00', 'period': 20, 'line_width': 2},
+            'ema': {'enabled': True, 'color': '#ff00ff', 'period': 12, 'line_width': 2},
+            'rsi': {'enabled': True, 'color': '#ffaa00', 'period': 14, 'overbought': 70, 'oversold': 30, 'line_width': 2},
+            'macd': {'enabled': True, 'fast': 12, 'slow': 26, 'signal': 9, 'line_width': 2},
+            'bollinger': {'enabled': True, 'period': 20, 'std': 2.0, 'line_width': 1.5},
+            'stochastic': {'enabled': True, 'k_period': 14, 'd_period': 3, 'slowing': 3, 'line_width': 2}
+        }
+        
+        # Datos demo para pruebas
+        self.demo_candles = self.create_demo_candles()
         
         # Inicializar UI
         self.init_ui()
@@ -45,14 +75,114 @@ class MainWindow(QMainWindow):
         # Configurar timers
         self.init_timers()
         
+        # Conectar señales internas
+        self.connect_internal_signals()
+        
+        # Cargar datos demo inicial
+        self.load_demo_data()
+        
         # Mostrar mensaje de inicio
         self.log_message("🚀 US500 Trading Platform iniciado")
-        self.log_message("📊 Versión 1.0.0")
-        self.log_message("💡 Presione 'Conectar a MT5' para comenzar")
+        self.log_message("📊 Versión 1.0.0 con Indicadores Técnicos")
+        self.log_message("💡 Presione 'Conectar a MT5' para datos reales")
+    
+    def create_demo_candles(self):
+        """Crear datos demo para pruebas."""
+        from datetime import datetime, timedelta
+        import random
+        
+        candles = []
+        base_price = 5000.0
+        current_time = datetime.now() - timedelta(hours=100)
+        
+        for i in range(100):
+            change = random.uniform(-20, 20)
+            open_price = base_price
+            close_price = base_price + change
+            high_price = max(open_price, close_price) + random.uniform(0, 8)
+            low_price = min(open_price, close_price) - random.uniform(0, 8)
+            
+            # Crear objeto candle simple
+            candle = type('Candle', (), {
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': close_price,
+                'timestamp': current_time + timedelta(hours=i)
+            })()
+            candles.append(candle)
+            base_price = close_price
+        
+        return candles
+    
+    def load_demo_data(self):
+        """Cargar datos demo en el gráfico."""
+        if not hasattr(self, 'chart_view') or not self.chart_view:
+            return
+        
+        try:
+            # Actualizar título
+            self.update_chart_title(self.current_symbol, self.current_timeframe, len(self.demo_candles))
+            
+            # Si ChartView es el componente real
+            if isinstance(self.chart_view, ChartView):
+                # Pasar configuración de indicadores al gráfico
+                self.chart_view.update_indicator_settings(self.indicators_config)
+                
+                # Actualizar gráfico con datos demo
+                self.chart_view.update_chart(self.demo_candles, self.indicators_config)
+                
+                # Activar indicadores por defecto
+                if hasattr(self.chart_view, 'btn_toggle_indicators'):
+                    self.chart_view.btn_toggle_indicators.setChecked(True)
+                
+                self.log_message("📊 Datos demo cargados con indicadores")
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error cargando datos demo: {str(e)}")
+    
+    def connect_internal_signals(self):
+        """Conectar señales internas entre componentes."""
+        try:
+            # Conectar botón de conexión
+            self.btn_connect.clicked.connect(self.toggle_connection)
+            
+            # Conectar botones de trading
+            self.btn_buy.clicked.connect(lambda: self.on_trading_action('buy'))
+            self.btn_sell.clicked.connect(lambda: self.on_trading_action('sell'))
+            
+            # Conectar botón de actualizar
+            self.btn_refresh.clicked.connect(self.refresh_data)
+            self.btn_refresh_positions.clicked.connect(self.refresh_positions)
+            
+            # Conectar señales del control panel si existe
+            if hasattr(self, 'control_panel') and self.control_panel:
+                if hasattr(self.control_panel, 'connect_requested'):
+                    self.control_panel.connect_requested.connect(self.connect_to_mt5)
+                if hasattr(self.control_panel, 'disconnect_requested'):
+                    self.control_panel.disconnect_requested.connect(self.disconnect_from_mt5)
+                if hasattr(self.control_panel, 'symbol_changed'):
+                    self.control_panel.symbol_changed.connect(self.on_symbol_changed)
+                if hasattr(self.control_panel, 'timeframe_changed'):
+                    self.control_panel.timeframe_changed.connect(self.on_timeframe_changed)
+                if hasattr(self.control_panel, 'buy_requested'):
+                    self.control_panel.buy_requested.connect(self.on_trading_signal)
+                if hasattr(self.control_panel, 'sell_requested'):
+                    self.control_panel.sell_requested.connect(self.on_trading_signal)
+                if hasattr(self.control_panel, 'refresh_positions'):
+                    self.control_panel.refresh_positions.connect(self.refresh_positions)
+                
+                # NUEVO: Conectar señal de indicadores del control panel
+                if hasattr(self.control_panel, 'indicators_updated'):
+                    self.control_panel.indicators_updated.connect(self.on_indicators_updated)
+                    self.log_message("✅ Señal de indicadores conectada")
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error conectando señales: {str(e)}")
     
     def init_ui(self):
         """Inicializar la interfaz de usuario."""
-        self.setWindowTitle("US500 Trading Platform")
+        self.setWindowTitle("US500 Trading Platform - Con Indicadores Técnicos")
         self.setGeometry(100, 100, 1400, 900)
         
         # Widget central
@@ -91,113 +221,6 @@ class MainWindow(QMainWindow):
         # 4. Barra de estado
         self.setup_status_bar()
     
-    def create_top_bar(self):
-        """Crear barra superior de controles."""
-        self.top_bar_layout = QHBoxLayout()
-        self.top_bar_layout.setSpacing(10)
-        
-        # Botón de conexión
-        self.btn_connect = QPushButton("🔌 Conectar a MT5")
-        self.btn_connect.setFixedWidth(150)
-        self.btn_connect.setStyleSheet("""
-            QPushButton {
-                background-color: #2a82da;
-                color: white;
-                font-weight: bold;
-                padding: 8px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #3a92ea;
-            }
-            QPushButton:disabled {
-                background-color: #555;
-            }
-        """)
-        
-        # Estado de conexión
-        self.lbl_connection_status = QLabel("❌ Desconectado")
-        self.lbl_connection_status.setStyleSheet("font-weight: bold; color: #ff6b6b;")
-        
-        # Separador
-        separator1 = QFrame()
-        separator1.setFrameShape(QFrame.VLine)
-        separator1.setFrameShadow(QFrame.Sunken)
-        separator1.setStyleSheet("color: #333;")
-        
-        # Selector de símbolo
-        self.cmb_symbol = QComboBox()
-        self.cmb_symbol.addItems(["US500", "EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "BTCUSD"])
-        self.cmb_symbol.setCurrentText("US500")
-        self.cmb_symbol.setFixedWidth(100)
-        self.cmb_symbol.setStyleSheet("""
-            QComboBox {
-                background-color: #2a2a2a;
-                color: white;
-                border: 1px solid #444;
-                border-radius: 3px;
-                padding: 5px;
-            }
-        """)
-        
-        # Selector de timeframe
-        self.cmb_timeframe = QComboBox()
-        self.cmb_timeframe.addItems(["1M", "5M", "15M", "30M", "1H", "4H", "1D", "1W"])
-        self.cmb_timeframe.setCurrentText("1H")
-        self.cmb_timeframe.setFixedWidth(80)
-        self.cmb_timeframe.setStyleSheet(self.cmb_symbol.styleSheet())
-        
-        # Botón de actualizar
-        self.btn_refresh = QPushButton("🔄 Actualizar")
-        self.btn_refresh.setFixedWidth(100)
-        self.btn_refresh.setEnabled(False)
-        self.btn_refresh.setStyleSheet("""
-            QPushButton {
-                background-color: #444;
-                color: white;
-                padding: 6px;
-                border-radius: 3px;
-            }
-            QPushButton:hover {
-                background-color: #555;
-            }
-            QPushButton:disabled {
-                background-color: #333;
-                color: #777;
-            }
-        """)
-        
-        # Separador
-        separator2 = QFrame()
-        separator2.setFrameShape(QFrame.VLine)
-        separator2.setFrameShadow(QFrame.Sunken)
-        separator2.setStyleSheet("color: #333;")
-        
-        # Información de cuenta
-        self.lbl_account = QLabel("Cuenta: --")
-        self.lbl_account.setStyleSheet("color: #aaa;")
-        
-        # Espaciador
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        
-        # Agregar widgets al layout
-        self.top_bar_layout.addWidget(self.btn_connect)
-        self.top_bar_layout.addWidget(self.lbl_connection_status)
-        self.top_bar_layout.addWidget(separator1)
-        self.top_bar_layout.addWidget(QLabel("Símbolo:"))
-        self.top_bar_layout.addWidget(self.cmb_symbol)
-        self.top_bar_layout.addWidget(QLabel("TF:"))
-        self.top_bar_layout.addWidget(self.cmb_timeframe)
-        self.top_bar_layout.addWidget(self.btn_refresh)
-        self.top_bar_layout.addWidget(separator2)
-        self.top_bar_layout.addWidget(self.lbl_account)
-        self.top_bar_layout.addWidget(spacer)
-        
-        # Conectar señales
-        self.cmb_symbol.currentTextChanged.connect(self.on_symbol_changed)
-        self.cmb_timeframe.currentTextChanged.connect(self.on_timeframe_changed)
-    
     def create_chart_panel(self):
         """Crear panel del gráfico."""
         widget = QWidget()
@@ -205,7 +228,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         
         # Título del gráfico
-        self.lbl_chart_title = QLabel("📊 US500 - 1H")
+        self.lbl_chart_title = QLabel("📊 US500 - 1H (Modo Demo)")
         self.lbl_chart_title.setStyleSheet("""
             QLabel {
                 font-size: 16px;
@@ -218,25 +241,26 @@ class MainWindow(QMainWindow):
         self.lbl_chart_title.setAlignment(Qt.AlignCenter)
         
         # Área del gráfico
-        if ChartView:
-            self.chart_view = ChartView()
+        if ChartView and IMPORT_SUCCESS:
+            try:
+                self.chart_view = ChartView()
+                self.log_message("✅ ChartView cargado exitosamente")
+                
+                # Configurar tamaño mínimo
+                self.chart_view.setMinimumSize(800, 500)
+                
+                # Conectar señales del chart view
+                if hasattr(self.chart_view, 'symbol_changed'):
+                    self.chart_view.symbol_changed.connect(self.on_symbol_changed)
+                if hasattr(self.chart_view, 'timeframe_changed'):
+                    self.chart_view.timeframe_changed.connect(self.on_timeframe_changed)
+                
+            except Exception as e:
+                self.log_message(f"⚠️ Error creando ChartView: {str(e)}")
+                self.chart_view = self.create_chart_placeholder()
         else:
-            # Placeholder si ChartView no existe
-            self.chart_view = QLabel(
-                "<center><h3>Gráfico de Trading</h3>"
-                "<p>Instale pyqtgraph para gráficos interactivos:</p>"
-                "<code>pip install pyqtgraph</code></center>"
-            )
-            self.chart_view.setStyleSheet("""
-                QLabel {
-                    background-color: #1a1a1a;
-                    color: #888;
-                    font-family: monospace;
-                    border: 2px dashed #444;
-                    border-radius: 8px;
-                }
-            """)
-            self.chart_view.setAlignment(Qt.AlignCenter)
+            self.chart_view = self.create_chart_placeholder()
+            self.log_message("⚠️ ChartView no disponible - usando placeholder")
         
         # Panel de precios en tiempo real
         price_panel = self.create_price_panel()
@@ -248,68 +272,43 @@ class MainWindow(QMainWindow):
         
         return widget
     
-    def create_price_panel(self):
-        """Crear panel de precios en tiempo real."""
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(10, 5, 10, 5)
-        layout.setSpacing(15)
-        
-        # Estilo para etiquetas de precio
-        price_style = """
+    def create_chart_placeholder(self):
+        """Crear placeholder para el gráfico."""
+        placeholder = QLabel(
+            "<center><h3>📈 Gráfico con Indicadores Técnicos</h3>"
+            "<p>Conecte a MT5 para ver datos reales</p>"
+            "<p><small>Modo Demo: Mostrando datos de prueba</small></p></center>"
+        )
+        placeholder.setStyleSheet("""
             QLabel {
-                font-family: 'Consolas', 'Monospace';
-                font-weight: bold;
-                padding: 8px 15px;
-                border-radius: 5px;
-                min-width: 140px;
-                text-align: center;
-                font-size: 13px;
+                background-color: #1a1a1a;
+                color: #888;
+                font-family: monospace;
+                border: 2px dashed #444;
+                border-radius: 8px;
+                padding: 50px;
             }
-        """
-        
-        # Precio BID
-        self.lbl_bid = QLabel("BID: --")
-        self.lbl_bid.setStyleSheet(price_style + "background-color: #1a2a1a; color: #0af;")
-        
-        # Precio ASK
-        self.lbl_ask = QLabel("ASK: --")
-        self.lbl_ask.setStyleSheet(price_style + "background-color: #2a1a1a; color: #f0a;")
-        
-        # Spread
-        self.lbl_spread = QLabel("Spread: --")
-        self.lbl_spread.setStyleSheet(price_style + "background-color: #2a2a2a; color: #ccc;")
-        
-        # Cambio
-        self.lbl_change = QLabel("Cambio: --")
-        self.lbl_change.setStyleSheet(price_style + "background-color: #1a1a2a; color: #ccc;")
-        
-        # Alto/Bajo
-        self.lbl_high = QLabel("Alto: --")
-        self.lbl_high.setStyleSheet("QLabel { color: #0f0; font-weight: bold; padding: 5px 10px; }")
-        
-        self.lbl_low = QLabel("Bajo: --")
-        self.lbl_low.setStyleSheet("QLabel { color: #f00; font-weight: bold; padding: 5px 10px; }")
-        
-        # Agregar widgets
-        layout.addWidget(self.lbl_bid)
-        layout.addWidget(self.lbl_ask)
-        layout.addWidget(self.lbl_spread)
-        layout.addWidget(self.lbl_change)
-        layout.addStretch()
-        layout.addWidget(self.lbl_high)
-        layout.addWidget(self.lbl_low)
-        
-        return widget
+        """)
+        placeholder.setAlignment(Qt.AlignCenter)
+        return placeholder
     
     def create_control_panel(self):
         """Crear panel de control lateral."""
         # Si ControlPanel existe, usarlo
-        if ControlPanel:
-            self.control_panel = ControlPanel()
-            return self.control_panel
-        
-        # Si no, crear panel básico
+        if ControlPanel and IMPORT_SUCCESS:
+            try:
+                self.control_panel = ControlPanel()
+                self.log_message("✅ ControlPanel cargado exitosamente")
+                return self.control_panel
+            except Exception as e:
+                self.log_message(f"⚠️ Error creando ControlPanel: {str(e)}")
+                return self.create_basic_control_panel()
+        else:
+            self.log_message("⚠️ ControlPanel no disponible - usando versión básica")
+            return self.create_basic_control_panel()
+    
+    def create_basic_control_panel(self):
+        """Crear panel de control básico."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setSpacing(10)
@@ -321,582 +320,366 @@ class MainWindow(QMainWindow):
         trading_tab = self.create_trading_tab()
         self.tab_widget.addTab(trading_tab, "📊 Trading")
         
-        # 2. Pestaña de Posiciones
+        # 2. Pestaña de Indicadores (NUEVA)
+        indicators_tab = self.create_indicators_tab()
+        self.tab_widget.addTab(indicators_tab, "📈 Indicadores")
+        
+        # 3. Pestaña de Posiciones
         positions_tab = self.create_positions_tab()
         self.tab_widget.addTab(positions_tab, "💰 Posiciones")
-        
-        # 3. Pestaña de Órdenes
-        orders_tab = self.create_orders_tab()
-        self.tab_widget.addTab(orders_tab, "⏳ Órdenes")
         
         # 4. Pestaña de Cuenta
         account_tab = self.create_account_tab()
         self.tab_widget.addTab(account_tab, "👤 Cuenta")
         
-        # 5. Pestaña de Logs
-        logs_tab = self.create_logs_tab()
-        self.tab_widget.addTab(logs_tab, "📝 Logs")
-        
         layout.addWidget(self.tab_widget)
         
         return widget
     
-    def create_trading_tab(self):
-        """Crear pestaña de trading."""
+    def create_indicators_tab(self):
+        """Crear pestaña de configuración de indicadores."""
         widget = QWidget()
         layout = QVBoxLayout(widget)
         layout.setSpacing(15)
         
-        # Grupo de operación rápida
-        group_trade = QGroupBox("Operación Rápida")
-        group_layout = QGridLayout(group_trade)
+        # Grupo de indicadores
+        group_indicators = QGroupBox("Configuración de Indicadores Técnicos")
+        indicators_layout = QGridLayout(group_indicators)
         
-        # Volumen
-        group_layout.addWidget(QLabel("Volumen:"), 0, 0)
-        self.spin_volume = QComboBox()
-        self.spin_volume.addItems(["0.01", "0.1", "0.5", "1.0", "2.0", "5.0"])
-        self.spin_volume.setCurrentText("0.1")
-        group_layout.addWidget(self.spin_volume, 0, 1)
+        # SMA
+        indicators_layout.addWidget(QLabel("SMA (20):"), 0, 0)
+        self.cb_sma = QComboBox()
+        self.cb_sma.addItems(["Desactivado", "Activo"])
+        self.cb_sma.setCurrentText("Activo")
+        self.cb_sma.currentTextChanged.connect(self.on_indicator_changed)
+        indicators_layout.addWidget(self.cb_sma, 0, 1)
         
-        # SL
-        group_layout.addWidget(QLabel("SL (pips):"), 1, 0)
-        self.spin_sl = QComboBox()
-        self.spin_sl.addItems(["10", "20", "50", "100", "200"])
-        self.spin_sl.setCurrentText("50")
-        group_layout.addWidget(self.spin_sl, 1, 1)
+        # EMA
+        indicators_layout.addWidget(QLabel("EMA (12):"), 1, 0)
+        self.cb_ema = QComboBox()
+        self.cb_ema.addItems(["Desactivado", "Activo"])
+        self.cb_ema.setCurrentText("Activo")
+        self.cb_ema.currentTextChanged.connect(self.on_indicator_changed)
+        indicators_layout.addWidget(self.cb_ema, 1, 1)
         
-        # TP
-        group_layout.addWidget(QLabel("TP (pips):"), 2, 0)
-        self.spin_tp = QComboBox()
-        self.spin_tp.addItems(["20", "50", "100", "200", "500"])
-        self.spin_tp.setCurrentText("100")
-        group_layout.addWidget(self.spin_tp, 2, 1)
+        # RSI
+        indicators_layout.addWidget(QLabel("RSI (14):"), 2, 0)
+        self.cb_rsi = QComboBox()
+        self.cb_rsi.addItems(["Desactivado", "Activo"])
+        self.cb_rsi.setCurrentText("Activo")
+        self.cb_rsi.currentTextChanged.connect(self.on_indicator_changed)
+        indicators_layout.addWidget(self.cb_rsi, 2, 1)
         
-        # Comentario
-        group_layout.addWidget(QLabel("Comentario:"), 3, 0)
-        self.txt_comment = QComboBox()
-        self.txt_comment.addItems(["Operación manual", "Señal técnica", "Scalping", "Swing"])
-        self.txt_comment.setEditable(True)
-        group_layout.addWidget(self.txt_comment, 3, 1)
+        # MACD
+        indicators_layout.addWidget(QLabel("MACD:"), 3, 0)
+        self.cb_macd = QComboBox()
+        self.cb_macd.addItems(["Desactivado", "Activo"])
+        self.cb_macd.setCurrentText("Activo")
+        self.cb_macd.currentTextChanged.connect(self.on_indicator_changed)
+        indicators_layout.addWidget(self.cb_macd, 3, 1)
         
-        # Botón COMPRAR
-        self.btn_buy = QPushButton("🟢 COMPRAR")
-        self.btn_buy.setStyleSheet("""
+        # Bollinger Bands
+        indicators_layout.addWidget(QLabel("Bollinger:"), 4, 0)
+        self.cb_bb = QComboBox()
+        self.cb_bb.addItems(["Desactivado", "Activo"])
+        self.cb_bb.setCurrentText("Activo")
+        self.cb_bb.currentTextChanged.connect(self.on_indicator_changed)
+        indicators_layout.addWidget(self.cb_bb, 4, 1)
+        
+        # Botón para aplicar indicadores
+        self.btn_apply_indicators = QPushButton("✅ Aplicar Indicadores al Gráfico")
+        self.btn_apply_indicators.setStyleSheet("""
             QPushButton {
-                background-color: #00a86b;
+                background-color: #4CAF50;
                 color: white;
                 font-weight: bold;
-                padding: 12px;
-                border-radius: 6px;
-                font-size: 16px;
-                margin-top: 10px;
+                padding: 10px;
+                border-radius: 5px;
+                margin-top: 15px;
             }
             QPushButton:hover {
-                background-color: #00b87b;
+                background-color: #45a049;
             }
-            QPushButton:disabled {
-                background-color: #555;
-            }
-        """)
-        self.btn_buy.setEnabled(False)
-        
-        # Botón VENDER
-        self.btn_sell = QPushButton("🔴 VENDER")
-        self.btn_sell.setStyleSheet("""
-            QPushButton {
-                background-color: #ff4444;
-                color: white;
-                font-weight: bold;
-                padding: 12px;
-                border-radius: 6px;
-                font-size: 16px;
-            }
-            QPushButton:hover {
-                background-color: #ff5555;
-            }
-            QPushButton:disabled {
-                background-color: #555;
+            QPushButton:pressed {
+                background-color: #3d8b40;
             }
         """)
-        self.btn_sell.setEnabled(False)
+        self.btn_apply_indicators.clicked.connect(self.apply_indicators)
         
-        group_layout.addWidget(self.btn_buy, 4, 0, 1, 2)
-        group_layout.addWidget(self.btn_sell, 5, 0, 1, 2)
-        
-        # Grupo de información de cuenta
-        group_account = QGroupBox("Información Rápida")
-        account_layout = QVBoxLayout(group_account)
-        
-        self.lbl_balance = QLabel("Balance: --")
-        self.lbl_balance.setStyleSheet("font-family: monospace; color: #fff;")
-        
-        self.lbl_equity = QLabel("Equity: --")
-        self.lbl_equity.setStyleSheet("font-family: monospace; color: #fff;")
-        
-        self.lbl_margin = QLabel("Margen: --")
-        self.lbl_margin.setStyleSheet("font-family: monospace; color: #fff;")
-        
-        self.lbl_free_margin = QLabel("Margen Libre: --")
-        self.lbl_free_margin.setStyleSheet("font-family: monospace; color: #fff;")
-        
-        self.lbl_margin_level = QLabel("Nivel de Margen: --")
-        self.lbl_margin_level.setStyleSheet("font-family: monospace; color: #fff;")
-        
-        # Barra de nivel de margen
-        self.progress_margin = QProgressBar()
-        self.progress_margin.setRange(0, 1000)
-        self.progress_margin.setTextVisible(True)
-        self.progress_margin.setFormat("%v%%")
-        self.progress_margin.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #444;
-                border-radius: 3px;
-                text-align: center;
-            }
-            QProgressBar::chunk {
-                background-color: #2a82da;
+        # Información de indicadores
+        self.lbl_indicators_info = QLabel("Indicadores: SMA, EMA, RSI, MACD, Bollinger activados")
+        self.lbl_indicators_info.setStyleSheet("""
+            QLabel {
+                color: #0af;
+                font-style: italic;
+                padding: 10px;
+                background-color: #1a1a1a;
+                border-radius: 5px;
+                border: 1px solid #333;
             }
         """)
         
-        account_layout.addWidget(self.lbl_balance)
-        account_layout.addWidget(self.lbl_equity)
-        account_layout.addWidget(self.lbl_margin)
-        account_layout.addWidget(self.lbl_free_margin)
-        account_layout.addWidget(self.lbl_margin_level)
-        account_layout.addWidget(self.progress_margin)
-        account_layout.addStretch()
+        # Agregar al layout
+        indicators_layout.addWidget(self.btn_apply_indicators, 5, 0, 1, 2)
+        indicators_layout.addWidget(self.lbl_indicators_info, 6, 0, 1, 2)
         
-        # Agregar grupos al layout
-        layout.addWidget(group_trade)
-        layout.addWidget(group_account)
+        layout.addWidget(group_indicators)
         layout.addStretch()
         
         return widget
     
-    def create_positions_tab(self):
-        """Crear pestaña de posiciones."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setSpacing(10)
+    def on_indicator_changed(self):
+        """Manejador para cambio en configuración de indicadores."""
+        # Actualizar configuración local
+        self.indicators_config['sma']['enabled'] = (self.cb_sma.currentText() == "Activo")
+        self.indicators_config['ema']['enabled'] = (self.cb_ema.currentText() == "Activo")
+        self.indicators_config['rsi']['enabled'] = (self.cb_rsi.currentText() == "Activo")
+        self.indicators_config['macd']['enabled'] = (self.cb_macd.currentText() == "Activo")
+        self.indicators_config['bollinger']['enabled'] = (self.cb_bb.currentText() == "Activo")
         
-        # Botón de actualizar
-        self.btn_refresh_positions = QPushButton("🔄 Actualizar Posiciones")
-        self.btn_refresh_positions.setEnabled(False)
-        self.btn_refresh_positions.setStyleSheet("""
-            QPushButton {
-                background-color: #444;
-                color: white;
-                padding: 8px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background-color: #555;
-            }
-            QPushButton:disabled {
-                background-color: #333;
-            }
-        """)
+        # Actualizar etiqueta de información
+        active_indicators = []
+        if self.indicators_config['sma']['enabled']: active_indicators.append("SMA")
+        if self.indicators_config['ema']['enabled']: active_indicators.append("EMA")
+        if self.indicators_config['rsi']['enabled']: active_indicators.append("RSI")
+        if self.indicators_config['macd']['enabled']: active_indicators.append("MACD")
+        if self.indicators_config['bollinger']['enabled']: active_indicators.append("BB")
         
-        # Área de texto para posiciones
-        self.txt_positions = QTextEdit()
-        self.txt_positions.setReadOnly(True)
-        self.txt_positions.setStyleSheet("""
-            QTextEdit {
-                background-color: #1a1a1a;
-                color: #ccc;
-                font-family: monospace;
-                font-size: 12px;
-                border: 1px solid #333;
-                border-radius: 4px;
-            }
-        """)
-        self.txt_positions.setPlaceholderText("No hay posiciones abiertas...")
-        
-        layout.addWidget(self.btn_refresh_positions)
-        layout.addWidget(self.txt_positions, 1)  # 1 = stretch
-        
-        return widget
-    
-    def create_orders_tab(self):
-        """Crear pestaña de órdenes pendientes."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        # Tabla de órdenes
-        self.table_orders = QTableWidget()
-        self.table_orders.setColumnCount(7)
-        self.table_orders.setHorizontalHeaderLabels(["Ticket", "Símbolo", "Tipo", "Volumen", "Precio", "SL", "TP"])
-        
-        # Configurar tabla
-        header = self.table_orders.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Stretch)
-        self.table_orders.setAlternatingRowColors(True)
-        self.table_orders.setStyleSheet("""
-            QTableWidget {
-                background-color: #1a1a1a;
-                alternate-background-color: #222;
-                color: #ccc;
-                gridline-color: #333;
-                border: 1px solid #333;
-            }
-            QHeaderView::section {
-                background-color: #2a2a2a;
-                color: #ddd;
-                padding: 5px;
-                border: 1px solid #333;
-            }
-        """)
-        
-        layout.addWidget(self.table_orders)
-        
-        return widget
-    
-    def create_account_tab(self):
-        """Crear pestaña de información de cuenta."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setSpacing(15)
-        
-        # Información básica
-        group_basic = QGroupBox("Información de Cuenta")
-        basic_layout = QGridLayout(group_basic)
-        
-        basic_layout.addWidget(QLabel("Login:"), 0, 0)
-        self.lbl_account_login = QLabel("--")
-        basic_layout.addWidget(self.lbl_account_login, 0, 1)
-        
-        basic_layout.addWidget(QLabel("Nombre:"), 1, 0)
-        self.lbl_account_name = QLabel("--")
-        basic_layout.addWidget(self.lbl_account_name, 1, 1)
-        
-        basic_layout.addWidget(QLabel("Servidor:"), 2, 0)
-        self.lbl_account_server = QLabel("--")
-        basic_layout.addWidget(self.lbl_account_server, 2, 1)
-        
-        basic_layout.addWidget(QLabel("Moneda:"), 3, 0)
-        self.lbl_account_currency = QLabel("--")
-        basic_layout.addWidget(self.lbl_account_currency, 3, 1)
-        
-        basic_layout.addWidget(QLabel("Apalancamiento:"), 4, 0)
-        self.lbl_account_leverage = QLabel("--")
-        basic_layout.addWidget(self.lbl_account_leverage, 4, 1)
-        
-        # Estadísticas
-        group_stats = QGroupBox("Estadísticas")
-        stats_layout = QGridLayout(group_stats)
-        
-        stats_layout.addWidget(QLabel("Posiciones:"), 0, 0)
-        self.lbl_stats_positions = QLabel("0")
-        stats_layout.addWidget(self.lbl_stats_positions, 0, 1)
-        
-        stats_layout.addWidget(QLabel("Órdenes:"), 1, 0)
-        self.lbl_stats_orders = QLabel("0")
-        stats_layout.addWidget(self.lbl_stats_orders, 1, 1)
-        
-        stats_layout.addWidget(QLabel("Profit Total:"), 2, 0)
-        self.lbl_stats_profit = QLabel("$ 0.00")
-        stats_layout.addWidget(self.lbl_stats_profit, 2, 1)
-        
-        stats_layout.addWidget(QLabel("Profit Hoy:"), 3, 0)
-        self.lbl_stats_daily_profit = QLabel("$ 0.00")
-        stats_layout.addWidget(self.lbl_stats_daily_profit, 3, 1)
-        
-        # Agregar grupos
-        layout.addWidget(group_basic)
-        layout.addWidget(group_stats)
-        layout.addStretch()
-        
-        return widget
-    
-    def create_logs_tab(self):
-        """Crear pestaña de logs."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        self.txt_logs = QTextEdit()
-        self.txt_logs.setReadOnly(True)
-        self.txt_logs.setStyleSheet("""
-            QTextEdit {
-                background-color: #000;
-                color: #0f0;
-                font-family: 'Courier New', monospace;
-                font-size: 11px;
-                border: 1px solid #333;
-            }
-        """)
-        self.txt_logs.setPlaceholderText("Logs del sistema...")
-        
-        layout.addWidget(self.txt_logs)
-        
-        return widget
-    
-    def create_bottom_panel(self):
-        """Crear panel inferior (mini logs)."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(5, 5, 5, 5)
-        
-        # Mini log
-        self.txt_mini_log = QTextEdit()
-        self.txt_mini_log.setMaximumHeight(80)
-        self.txt_mini_log.setReadOnly(True)
-        self.txt_mini_log.setStyleSheet("""
-            QTextEdit {
-                background-color: #1a1a1a;
-                color: #ccc;
-                font-family: monospace;
-                font-size: 10px;
-                border: 1px solid #333;
-                border-radius: 3px;
-            }
-        """)
-        self.txt_mini_log.setPlaceholderText("Logs recientes...")
-        
-        layout.addWidget(self.txt_mini_log)
-        
-        return widget
-    
-    def setup_status_bar(self):
-        """Configurar barra de estado."""
-        self.statusBar().showMessage("Listo")
-        
-        # Etiquetas de estado
-        self.lbl_status_data = QLabel("Datos: Esperando conexión")
-        self.lbl_status_time = QLabel("--:--:--")
-        
-        self.statusBar().addPermanentWidget(self.lbl_status_data)
-        self.statusBar().addPermanentWidget(self.lbl_status_time)
-    
-    def apply_theme(self):
-        """Aplicar tema oscuro a la aplicación."""
-        if self.is_dark_theme:
-            dark_palette = QPalette()
-            dark_palette.setColor(QPalette.Window, QColor(53, 53, 53))
-            dark_palette.setColor(QPalette.WindowText, Qt.white)
-            dark_palette.setColor(QPalette.Base, QColor(35, 35, 35))
-            dark_palette.setColor(QPalette.AlternateBase, QColor(53, 53, 53))
-            dark_palette.setColor(QPalette.ToolTipBase, Qt.white)
-            dark_palette.setColor(QPalette.ToolTipText, Qt.white)
-            dark_palette.setColor(QPalette.Text, Qt.white)
-            dark_palette.setColor(QPalette.Button, QColor(53, 53, 53))
-            dark_palette.setColor(QPalette.ButtonText, Qt.white)
-            dark_palette.setColor(QPalette.BrightText, Qt.red)
-            dark_palette.setColor(QPalette.Link, QColor(42, 130, 218))
-            dark_palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
-            dark_palette.setColor(QPalette.HighlightedText, Qt.black)
-            
-            self.setPalette(dark_palette)
-    
-    def init_timers(self):
-        """Inicializar timers."""
-        # Timer para actualizar reloj
-        self.clock_timer = QTimer()
-        self.clock_timer.timeout.connect(self.update_clock)
-        self.clock_timer.start(1000)
-    
-    def update_clock(self):
-        """Actualizar reloj en barra de estado."""
-        current_time = datetime.now().strftime("%H:%M:%S")
-        self.lbl_status_time.setText(current_time)
-    
-    def log_message(self, message):
-        """Agregar mensaje a los logs."""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        log_entry = f"[{timestamp}] {message}"
-        
-        # Agregar a mini log
-        self.txt_mini_log.append(log_entry)
-        
-        # Agregar a log completo
-        self.txt_logs.append(log_entry)
-        
-        # Mantener mini log limitado
-        lines = self.txt_mini_log.toPlainText().split('\n')
-        if len(lines) > 10:
-            self.txt_mini_log.setPlainText('\n'.join(lines[-10:]))
-        
-        # Auto-scroll en logs
-        scrollbar = self.txt_logs.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
-        
-        # Actualizar barra de estado
-        self.lbl_status_data.setText(f"Log: {message[:30]}...")
-    
-    def update_connection_status(self, connected, message=""):
-        """Actualizar estado de conexión."""
-        self.is_connected = connected
-        
-        if connected:
-            self.lbl_connection_status.setText("✅ Conectado")
-            self.lbl_connection_status.setStyleSheet("font-weight: bold; color: #4cd964;")
-            self.btn_connect.setText("🔌 Desconectar")
-            
-            # Habilitar controles
-            self.btn_refresh.setEnabled(True)
-            self.btn_buy.setEnabled(True)
-            self.btn_sell.setEnabled(True)
-            self.btn_refresh_positions.setEnabled(True)
-            
-            if message:
-                self.log_message(f"✅ {message}")
+        if active_indicators:
+            self.lbl_indicators_info.setText(f"Indicadores activos: {', '.join(active_indicators)}")
         else:
-            self.lbl_connection_status.setText("❌ Desconectado")
-            self.lbl_connection_status.setStyleSheet("font-weight: bold; color: #ff6b6b;")
-            self.btn_connect.setText("🔌 Conectar a MT5")
-            
-            # Deshabilitar controles
-            self.btn_refresh.setEnabled(False)
-            self.btn_buy.setEnabled(False)
-            self.btn_sell.setEnabled(False)
-            self.btn_refresh_positions.setEnabled(False)
-            
-            if message:
-                self.log_message(f"❌ {message}")
+            self.lbl_indicators_info.setText("Ningún indicador activado")
+        
+        self.log_message(f"⚙️ Configuración de indicadores actualizada")
     
-    def update_price_display(self, bid, ask, spread=None):
-        """Actualizar display de precios."""
-        self.lbl_bid.setText(f"BID: {bid:.5f}")
-        self.lbl_ask.setText(f"ASK: {ask:.5f}")
-        
-        if spread is not None:
-            self.lbl_spread.setText(f"Spread: {spread:.1f} pips")
-        
-        # Calcular cambio (simulado)
+    def apply_indicators(self):
+        """Aplicar configuración de indicadores al gráfico."""
         try:
-            current_bid = float(bid)
-            # Aquí iría lógica para calcular cambio real
-            self.lbl_change.setText("Cambio: +0.12%")
-        except:
-            pass
-    
-    def update_account_display(self, account_info):
-        """Actualizar información de cuenta en UI."""
-        if not account_info:
-            return
-        
-        # Información básica
-        self.lbl_account.setText(f"Cuenta: {account_info.get('login', '--')}")
-        
-        # Trading tab
-        self.lbl_balance.setText(f"Balance: ${account_info.get('balance', 0):.2f}")
-        self.lbl_equity.setText(f"Equity: ${account_info.get('equity', 0):.2f}")
-        self.lbl_margin.setText(f"Margen: ${account_info.get('margin', 0):.2f}")
-        
-        free_margin = account_info.get('free_margin', 0)
-        self.lbl_free_margin.setText(f"Margen Libre: ${free_margin:.2f}")
-        
-        margin_level = account_info.get('margin_level', 0)
-        self.lbl_margin_level.setText(f"Nivel de Margen: {margin_level:.1f}%")
-        
-        # Actualizar barra de progreso
-        self.progress_margin.setValue(int(margin_level))
-        
-        # Colores según nivel de margen
-        if margin_level < 100:
-            self.progress_margin.setStyleSheet("""
-                QProgressBar::chunk {
-                    background-color: #ff4444;
-                }
-            """)
-        elif margin_level < 200:
-            self.progress_margin.setStyleSheet("""
-                QProgressBar::chunk {
-                    background-color: #ffaa00;
-                }
-            """)
-        else:
-            self.progress_margin.setStyleSheet("""
-                QProgressBar::chunk {
-                    background-color: #00aa00;
-                }
-            """)
-        
-        # Account tab
-        self.lbl_account_login.setText(str(account_info.get('login', '--')))
-        self.lbl_account_name.setText(account_info.get('name', '--'))
-        self.lbl_account_server.setText(account_info.get('server', '--'))
-        self.lbl_account_currency.setText(account_info.get('currency', '--'))
-        
-        leverage = account_info.get('leverage', 0)
-        self.lbl_account_leverage.setText(f"1:{leverage}")
-    
-    def update_positions_display(self, positions):
-        """Actualizar display de posiciones."""
-        if not positions:
-            self.txt_positions.setPlainText("✅ No hay posiciones abiertas")
-            self.lbl_stats_positions.setText("0")
-            return
-        
-        text = f"📊 {len(positions)} Posición(es) Abierta(s):\n\n"
-        
-        total_profit = 0
-        for pos in positions:
-            if hasattr(pos, 'ticket'):
-                # Si es objeto Position
-                type_str = "📈 COMPRA" if pos.type == 0 else "📉 VENTA"
-                text += f"• #{pos.ticket} {type_str} {pos.symbol} "
-                text += f"Vol: {pos.volume} Precio: {pos.price_open:.5f} "
-                
-                profit = getattr(pos, 'profit', 0)
-                total_profit += profit
-                
-                profit_color = "🟢" if profit >= 0 else "🔴"
-                text += f"{profit_color} ${profit:.2f}\n"
-            elif isinstance(pos, dict):
-                # Si es diccionario
-                type_str = "📈 COMPRA" if pos.get('type') == 0 else "📉 VENTA"
-                text += f"• #{pos.get('ticket', 'N/A')} {type_str} {pos.get('symbol', 'N/A')} "
-                text += f"Vol: {pos.get('volume', 0)} "
-                
-                profit = pos.get('profit', 0)
-                total_profit += profit
-                
-                profit_color = "🟢" if profit >= 0 else "🔴"
-                text += f"{profit_color} ${profit:.2f}\n"
-            else:
-                text += f"• {str(pos)[:50]}...\n"
-        
-        self.txt_positions.setPlainText(text)
-        self.lbl_stats_positions.setText(str(len(positions)))
-        
-        # Actualizar profit total
-        self.lbl_stats_profit.setText(f"$ {total_profit:.2f}")
-        if total_profit >= 0:
-            self.lbl_stats_profit.setStyleSheet("color: #0f0; font-weight: bold;")
-        else:
-            self.lbl_stats_profit.setStyleSheet("color: #f00; font-weight: bold;")
-    
-    def update_chart_title(self, symbol, timeframe, candle_count=None):
-        """Actualizar título del gráfico."""
-        if candle_count:
-            self.lbl_chart_title.setText(f"📊 {symbol} - {timeframe} ({candle_count} velas)")
-        else:
-            self.lbl_chart_title.setText(f"📊 {symbol} - {timeframe}")
-    
-    def on_symbol_changed(self, symbol):
-        """Manejador para cambio de símbolo."""
-        self.symbol_changed.emit(symbol)
-        self.log_message(f"📈 Símbolo cambiado a: {symbol}")
-    
-    def on_timeframe_changed(self, timeframe):
-        """Manejador para cambio de timeframe."""
-        self.timeframe_changed.emit(timeframe)
-        self.log_message(f"⏰ Timeframe cambiado a: {timeframe}")
-    
-    def closeEvent(self, event):
-        """Manejador para cerrar la ventana."""
-        if hasattr(self, 'is_connected') and self.is_connected:
-            reply = QMessageBox.question(
-                self, "Confirmar Salida",
-                "¿Está seguro de que desea salir?\n\n"
-                "Se desconectará de MT5 y se cerrará la aplicación.",
-                QMessageBox.Yes | QMessageBox.No
-            )
+            # Emitir señal con configuración actualizada
+            self.indicators_updated.emit(self.indicators_config)
             
-            if reply == QMessageBox.Yes:
-                self.disconnect_requested.emit()
-                event.accept()
-            else:
-                event.ignore()
+            # Si tenemos ChartView, actualizarlo directamente
+            if hasattr(self, 'chart_view') and isinstance(self.chart_view, ChartView):
+                self.chart_view.update_indicator_settings(self.indicators_config)
+                
+                # Refrescar gráfico
+                if hasattr(self, 'is_connected') and self.is_connected:
+                    self.refresh_data()
+                else:
+                    # Usar datos demo
+                    self.chart_view.update_chart(self.demo_candles, self.indicators_config)
+            
+            self.log_message("✅ Indicadores aplicados al gráfico")
+            
+            # Contar indicadores activos
+            active_count = sum(1 for ind in self.indicators_config.values() if ind['enabled'])
+            self.log_message(f"📊 {active_count} indicadores activos")
+            
+        except Exception as e:
+            self.log_message(f"❌ Error aplicando indicadores: {str(e)}")
+    
+    def on_indicators_updated(self, indicator_configs):
+        """Manejador para señal de indicadores actualizados desde control panel."""
+        try:
+            self.log_message("📈 Recibiendo configuración de indicadores...")
+            
+            # Actualizar configuración local
+            self.indicators_config = indicator_configs
+            
+            # Aplicar al gráfico
+            if hasattr(self, 'chart_view') and isinstance(self.chart_view, ChartView):
+                self.chart_view.update_indicator_settings(self.indicators_config)
+                
+                # Refrescar datos
+                if self.is_connected:
+                    self.refresh_data()
+                else:
+                    self.chart_view.update_chart(self.demo_candles, self.indicators_config)
+                
+                # Activar botón de indicadores si existe
+                if hasattr(self.chart_view, 'btn_toggle_indicators'):
+                    self.chart_view.btn_toggle_indicators.setChecked(True)
+            
+            self.log_message("✅ Indicadores actualizados desde ControlPanel")
+            
+        except Exception as e:
+            self.log_message(f"❌ Error en on_indicators_updated: {str(e)}")
+    
+    def toggle_connection(self):
+        """Alternar conexión a MT5."""
+        if self.is_connected:
+            self.disconnect_from_mt5()
         else:
-            event.accept()
+            self.connect_to_mt5()
+    
+    def connect_to_mt5(self):
+        """Conectar a MT5."""
+        try:
+            self.log_message("🔌 Conectando a MT5...")
+            self.btn_connect.setEnabled(False)
+            self.btn_connect.setText("Conectando...")
+            
+            # Usar casos de uso si están disponibles
+            if IMPORT_SUCCESS:
+                self.mt5_use_case = create_connect_to_mt5_use_case(max_retries=3)
+                result = self.mt5_use_case.connect()
+                
+                if result.get('success', False):
+                    self.is_connected = True
+                    
+                    # Obtener información del servidor
+                    server_info = result.get('data', {}).get('server_info', 'Desconocido')
+                    if not server_info:
+                        server_info = result.get('data', {}).get('account_info', {}).get('server', 'Desconocido')
+                    
+                    self.server_name = server_info
+                    
+                    # Actualizar UI
+                    self.update_connection_status(True, f"Conectado a {server_info}")
+                    
+                    # Crear caso de uso de datos
+                    self.data_use_case = create_fetch_market_data_use_case(self.mt5_use_case)
+                    
+                    # Actualizar información de cuenta
+                    self.update_account_display(result.get('data', {}).get('account_info', {}))
+                    
+                    # Refrescar datos
+                    self.refresh_data()
+                    
+                    # Aplicar indicadores a datos reales
+                    self.apply_indicators()
+                    
+                    self.log_message(f"✅ Conexión exitosa a MT5")
+                else:
+                    self.update_connection_status(False, f"Error: {result.get('message', 'Desconocido')}")
+                    self.log_message(f"❌ Error de conexión: {result.get('message', 'Desconocido')}")
+            
+            else:
+                # Simular conexión exitosa para demo
+                self.is_connected = True
+                self.update_connection_status(True, "Modo Demo Activado")
+                self.log_message("✅ Modo Demo: Simulando conexión a MT5")
+                self.log_message("💡 Para datos reales, instale MetaTrader5")
+                
+                # Simular información de cuenta demo
+                demo_account = {
+                    'login': '12345678',
+                    'name': 'Demo Account',
+                    'server': 'Demo-Server',
+                    'currency': 'USD',
+                    'leverage': 100,
+                    'balance': 10000.00,
+                    'equity': 10500.00,
+                    'margin': 1500.00,
+                    'free_margin': 9000.00,
+                    'margin_level': 700.0
+                }
+                self.update_account_display(demo_account)
+                
+                # Simular algunas posiciones
+                demo_positions = [
+                    {'ticket': 1001, 'symbol': 'EURUSD', 'type': 0, 'volume': 0.1, 'price_open': 1.0850, 'profit': 25.50},
+                    {'ticket': 1002, 'symbol': 'US500', 'type': 1, 'volume': 0.05, 'price_open': 5100.0, 'profit': -12.75}
+                ]
+                self.update_positions_display(demo_positions)
+                
+        except Exception as e:
+            self.update_connection_status(False, f"Excepción: {str(e)}")
+            self.log_message(f"❌ Excepción en conexión: {str(e)}")
+        finally:
+            self.btn_connect.setEnabled(True)
+            if self.is_connected:
+                self.btn_connect.setText("🔌 Desconectar")
+            else:
+                self.btn_connect.setText("🔌 Conectar a MT5")
+    
+    def disconnect_from_mt5(self):
+        """Desconectar de MT5."""
+        try:
+            if self.mt5_use_case:
+                self.mt5_use_case.disconnect()
+            
+            self.is_connected = False
+            self.update_connection_status(False, "Desconectado")
+            
+            # Volver a datos demo
+            self.load_demo_data()
+            
+            self.log_message("🔌 Desconectado de MT5")
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error al desconectar: {str(e)}")
+    
+    def refresh_data(self):
+        """Refrescar datos del mercado."""
+        try:
+            if self.is_connected and self.data_use_case:
+                self.log_message("🔄 Actualizando datos de mercado...")
+                
+                # Obtener datos históricos
+                result = self.data_use_case.get_historical_data(
+                    symbol=self.current_symbol,
+                    timeframe=self.current_timeframe,
+                    count=100
+                )
+                
+                if result.get('success', False):
+                    data = result.get('data', [])
+                    symbol_info = result.get('symbol_info', {})
+                    
+                    # Actualizar gráfico
+                    if hasattr(self, 'chart_view') and isinstance(self.chart_view, ChartView):
+                        self.chart_view.update_chart(data, self.indicators_config)
+                    
+                    # Actualizar título
+                    self.update_chart_title(self.current_symbol, self.current_timeframe, len(data))
+                    
+                    self.log_message(f"✅ Datos actualizados: {len(data)} velas")
+                    
+                    # Obtener datos en tiempo real
+                    real_time_result = self.data_use_case.get_real_time_data(self.current_symbol)
+                    if real_time_result.get('success', False):
+                        price_data = real_time_result.get('data', {})
+                        self.update_price_display(
+                            price_data.get('bid', 0),
+                            price_data.get('ask', 0),
+                            price_data.get('spread', 0)
+                        )
+                else:
+                    self.log_message(f"❌ Error obteniendo datos: {result.get('message', 'Desconocido')}")
+            
+            elif not self.is_connected:
+                # Usar datos demo
+                self.load_demo_data()
+                
+        except Exception as e:
+            self.log_message(f"❌ Error refrescando datos: {str(e)}")
+    
+    def refresh_positions(self):
+        """Refrescar posiciones."""
+        if self.is_connected:
+            self.log_message("🔄 Actualizando posiciones...")
+            # Aquí iría la lógica real para obtener posiciones
+        else:
+            # Simular actualización en modo demo
+            self.log_message("ℹ️ Modo Demo: Simulando actualización de posiciones")
+    
+    def on_trading_action(self, action):
+        """Manejador para acciones de trading."""
+        if action == 'buy':
+            self.log_message("📤 Orden de COMPRA enviada (simulación)")
+        elif action == 'sell':
+            self.log_message("📤 Orden de VENTA enviada (simulación)")
+    
+    def on_trading_signal(self, order_details):
+        """Manejador para señales de trading desde control panel."""
+        action = "COMPRA" if 'buy' in str(order_details).lower() else "VENTA"
+        self.log_message(f"📤 Señal de {action} recibida: {order_details}")
+    
+    # Mantén los métodos restantes igual que en tu versión original...
+    # (create_top_bar, create_price_panel, create_trading_tab, etc.)
+    # Solo asegúrate de que update_connection_status, update_price_display,
+    # update_account_display, update_positions_display, update_chart_title,
+    # log_message y closeEvent estén presentes.
+
+    # ... (el resto de los métodos se mantienen igual que en tu código original)

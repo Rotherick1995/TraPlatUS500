@@ -1,0 +1,65 @@
+{
+  "sma": {
+    "enabled": true,
+    "color": "#ffff00",
+    "line_width": 1.5,
+    "params": {
+      "period": 20
+    }
+  },
+  "ema": {
+    "enabled": true,
+    "color": "#ff00ff",
+    "line_width": 1.5,
+    "params": {
+      "period": 12
+    }
+  },
+  "rsi": {
+    "enabled": true,
+    "color": "#5500ff",
+    "line_width": 2.0,
+    "params": {
+      "period": 14,
+      "overbought": 80,
+      "oversold": 20
+    }
+  },
+  "macd": {
+    "enabled": true,
+    "color": "#00ff00",
+    "line_width": 2.0,
+    "params": {
+      "fast_period": 8,
+      "slow_period": 26,
+      "signal_period": 9,
+      "signal_color": "#ff0000",
+      "histogram_positive_color": "#00aa00",
+      "histogram_negative_color": "#aa0000"
+    }
+  },
+  "bollinger": {
+    "enabled": true,
+    "color": "#ffffff",
+    "line_width": 1.0,
+    "params": {
+      "period": 20,
+      "std_multiplier": 2.0,
+      "upper_color": "#00ffff",
+      "lower_color": "#00ffff"
+    }
+  },
+  "stochastic": {
+    "enabled": true,
+    "color": "#00ffff",
+    "line_width": 2.0,
+    "params": {
+      "k_period": 14,
+      "d_period": 3,
+      "slowing": 3,
+      "d_line_color": "#ffff00",
+      "overbought_level": 80,
+      "oversold_level": 20
+    }
+  }
+}

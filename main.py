@@ -23,6 +23,21 @@ try:
     from src.domain.value_objects.timeframe import TimeFrame
     from src.config import settings
     
+    # Importaciones para indicadores
+    try:
+        # Intentar importar indicadores del dominio
+        from src.domain.indicators.sma_indicator import SMAIndicator
+        from src.domain.indicators.ema_indicator import EMAIndicator
+        from src.domain.indicators.rsi_indicator import RSIIndicator
+        from src.domain.indicators.macd_indicator import MACDIndicator
+        from src.domain.indicators.bollinger_indicator import BollingerIndicator
+        from src.domain.indicators.stochastic_indicator import StochasticIndicator
+        INDICATORS_AVAILABLE = True
+        print("✅ Indicadores del dominio cargados")
+    except ImportError as e:
+        print(f"⚠️ Indicadores del dominio no disponibles: {e}")
+        INDICATORS_AVAILABLE = False
+        
 except ImportError as e:
     print(f"❌ ERROR DE IMPORTACIÓN: {e}")
     print("\nVerifica que existan estos archivos:")
@@ -34,12 +49,27 @@ except ImportError as e:
 class TradingApp:
     def __init__(self):
         self.app = QApplication(sys.argv)
-        self.app.setApplicationName("US500 Trading Platform")
+        self.app.setApplicationName("US500 Trading Platform - Con Indicadores")
         self.app.setStyle('Fusion')
         
         self.is_connected = False
         self.current_symbol = settings.DEFAULT_SYMBOL
         self.current_timeframe = TimeFrame.H1
+        
+        # Configuración de indicadores
+        self.indicators_config = {
+            'sma': {'enabled': True, 'color': '#ffff00', 'period': 20, 'line_width': 2},
+            'ema': {'enabled': True, 'color': '#ff00ff', 'period': 12, 'line_width': 2},
+            'rsi': {'enabled': True, 'color': '#ffaa00', 'period': 14, 'overbought': 70, 'oversold': 30, 'line_width': 2},
+            'macd': {'enabled': True, 'fast': 12, 'slow': 26, 'signal': 9, 'line_width': 2},
+            'bollinger': {'enabled': True, 'period': 20, 'std': 2.0, 'line_width': 1.5},
+            'stochastic': {'enabled': True, 'k_period': 14, 'd_period': 3, 'slowing': 3, 'line_width': 2}
+        }
+        
+        # Instancias de indicadores (si están disponibles)
+        self.indicators = {}
+        if INDICATORS_AVAILABLE:
+            self.init_indicators()
         
         self.mt5_use_case = None
         self.data_use_case = None
@@ -50,11 +80,11 @@ class TradingApp:
             self.main_window = MainWindow()
             self.main_window.show()
             
-            if hasattr(self.main_window, 'btn_connect'):
-                self.main_window.btn_connect.clicked.connect(self.toggle_mt5_connection)
+            # Configurar conexiones de señales
+            self.setup_signals()
             
-            if hasattr(self.main_window, 'btn_refresh'):
-                self.main_window.btn_refresh.clicked.connect(self.refresh_all_data)
+            # Cargar datos demo inicial con indicadores
+            self.load_demo_data()
             
             # Intentar conexión automática
             if hasattr(settings, 'AUTO_CONNECT') and settings.AUTO_CONNECT:
@@ -65,6 +95,258 @@ class TradingApp:
             traceback.print_exc()
             sys.exit(1)
     
+    def init_indicators(self):
+        """Inicializar instancias de indicadores."""
+        try:
+            self.indicators = {
+                'sma': SMAIndicator(period=20),
+                'ema': EMAIndicator(period=12),
+                'rsi': RSIIndicator(period=14, overbought=70, oversold=30),
+                'macd': MACDIndicator(fast_period=12, slow_period=26, signal_period=9),
+                'bollinger': BollingerIndicator(period=20, std_multiplier=2.0),
+                'stochastic': StochasticIndicator(k_period=14, d_period=3, slowing=3)
+            }
+            
+            # Aplicar configuración a indicadores
+            for name, indicator in self.indicators.items():
+                if name in self.indicators_config:
+                    config = self.indicators_config[name]
+                    indicator.set_config(
+                        enabled=config.get('enabled', True),
+                        color=config.get('color', '#ffffff'),
+                        line_width=config.get('line_width', 1.5),
+                        **{k: v for k, v in config.items() if k not in ['enabled', 'color', 'line_width']}
+                    )
+            
+            self.log_message("✅ Indicadores técnicos inicializados")
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error inicializando indicadores: {str(e)}")
+    
+    def setup_signals(self):
+        """Configurar conexiones de señales entre componentes."""
+        try:
+            # Conexión MT5
+            if hasattr(self.main_window, 'btn_connect'):
+                self.main_window.btn_connect.clicked.connect(self.toggle_mt5_connection)
+            
+            # Actualización de datos
+            if hasattr(self.main_window, 'btn_refresh'):
+                self.main_window.btn_refresh.clicked.connect(self.refresh_all_data)
+            
+            # Cambio de símbolo
+            if hasattr(self.main_window, 'cmb_symbol'):
+                self.main_window.cmb_symbol.currentTextChanged.connect(self.on_symbol_changed)
+            
+            # Cambio de timeframe
+            if hasattr(self.main_window, 'cmb_timeframe'):
+                self.main_window.cmb_timeframe.currentTextChanged.connect(self.on_timeframe_changed)
+            
+            # Botón de aplicar indicadores (si existe en la ventana)
+            if hasattr(self.main_window, 'btn_apply_indicators'):
+                self.main_window.btn_apply_indicators.clicked.connect(self.apply_indicators_to_chart)
+            
+            # Señal de indicadores actualizados desde control panel
+            if hasattr(self.main_window, 'indicators_updated'):
+                self.main_window.indicators_updated.connect(self.on_indicators_updated)
+            
+            # Si el main window tiene control panel, conectar sus señales
+            if hasattr(self.main_window, 'control_panel'):
+                self.connect_control_panel_signals()
+            
+            self.log_message("✅ Señales conectadas")
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error configurando señales: {str(e)}")
+    
+    def connect_control_panel_signals(self):
+        """Conectar señales del control panel."""
+        try:
+            control_panel = self.main_window.control_panel
+            
+            # Señales de conexión
+            if hasattr(control_panel, 'connect_requested'):
+                control_panel.connect_requested.connect(self.connect_to_mt5)
+            if hasattr(control_panel, 'disconnect_requested'):
+                control_panel.disconnect_requested.connect(self.disconnect_from_mt5)
+            
+            # Señales de trading
+            if hasattr(control_panel, 'buy_requested'):
+                control_panel.buy_requested.connect(self.on_trading_signal)
+            if hasattr(control_panel, 'sell_requested'):
+                control_panel.sell_requested.connect(self.on_trading_signal)
+            
+            # Señal de indicadores (MÁS IMPORTANTE)
+            if hasattr(control_panel, 'indicators_updated'):
+                control_panel.indicators_updated.connect(self.on_indicators_updated_from_control)
+                self.log_message("✅ Señal de indicadores del ControlPanel conectada")
+            
+            self.log_message("✅ Señales del ControlPanel conectadas")
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error conectando ControlPanel: {str(e)}")
+    
+    def load_demo_data(self):
+        """Cargar datos demo para mostrar indicadores."""
+        try:
+            # Crear datos demo
+            demo_candles = self.create_demo_candles()
+            
+            # Aplicar indicadores a datos demo
+            self.apply_indicators_to_demo_data(demo_candles)
+            
+            self.log_message("📊 Datos demo cargados con indicadores")
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error cargando datos demo: {str(e)}")
+    
+    def create_demo_candles(self, count=100):
+        """Crear datos demo para pruebas."""
+        from datetime import datetime, timedelta
+        import random
+        
+        candles = []
+        base_price = 5000.0
+        current_time = datetime.now() - timedelta(hours=count)
+        
+        for i in range(count):
+            change = random.uniform(-20, 20)
+            open_price = base_price
+            close_price = base_price + change
+            high_price = max(open_price, close_price) + random.uniform(0, 8)
+            low_price = min(open_price, close_price) - random.uniform(0, 8)
+            
+            # Crear objeto candle simple
+            candle = type('Candle', (), {
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': close_price,
+                'timestamp': current_time + timedelta(hours=i),
+                'volume': random.randint(1000, 5000)
+            })()
+            candles.append(candle)
+            base_price = close_price
+        
+        return candles
+    
+    def apply_indicators_to_demo_data(self, candles):
+        """Aplicar indicadores a datos demo."""
+        try:
+            # Enviar datos demo al chart view
+            if hasattr(self.main_window, 'chart_view') and self.main_window.chart_view:
+                # Pasar configuración de indicadores
+                self.main_window.chart_view.update_indicator_settings(self.indicators_config)
+                
+                # Actualizar gráfico con datos demo
+                self.main_window.chart_view.update_chart(candles, self.indicators_config)
+                
+                # Activar visualización de indicadores
+                if hasattr(self.main_window.chart_view, 'btn_toggle_indicators'):
+                    self.main_window.chart_view.btn_toggle_indicators.setChecked(True)
+                    self.log_message("📈 Botón de indicadores activado")
+            
+        except Exception as e:
+            self.log_message(f"⚠️ Error aplicando indicadores a datos demo: {str(e)}")
+    
+    def apply_indicators_to_chart(self):
+        """Aplicar configuración de indicadores al gráfico."""
+        try:
+            self.log_message("⚙️ Aplicando indicadores al gráfico...")
+            
+            # Si tenemos configuración, aplicarla al chart view
+            if hasattr(self.main_window, 'chart_view') and self.main_window.chart_view:
+                self.main_window.chart_view.update_indicator_settings(self.indicators_config)
+                
+                # Refrescar datos
+                if self.is_connected:
+                    self.refresh_market_data()
+                else:
+                    # Usar datos demo
+                    demo_candles = self.create_demo_candles()
+                    self.main_window.chart_view.update_chart(demo_candles, self.indicators_config)
+                
+                # Activar visualización
+                if hasattr(self.main_window.chart_view, 'btn_toggle_indicators'):
+                    self.main_window.chart_view.btn_toggle_indicators.setChecked(True)
+                
+                # Contar indicadores activos
+                active_count = sum(1 for ind in self.indicators_config.values() if ind['enabled'])
+                self.log_message(f"✅ {active_count} indicadores aplicados al gráfico")
+            
+        except Exception as e:
+            self.log_message(f"❌ Error aplicando indicadores: {str(e)}")
+    
+    def on_indicators_updated(self, indicator_configs):
+        """Manejador para señal de indicadores actualizados."""
+        try:
+            self.log_message("📈 Recibiendo actualización de indicadores...")
+            self.indicators_config = indicator_configs
+            self.apply_indicators_to_chart()
+            
+        except Exception as e:
+            self.log_message(f"❌ Error en on_indicators_updated: {str(e)}")
+    
+    def on_indicators_updated_from_control(self, indicator_configs):
+        """Manejador para señal de indicadores desde ControlPanel."""
+        try:
+            self.log_message("📈 Actualización de indicadores desde ControlPanel")
+            
+            # Actualizar configuración local
+            self.indicators_config = indicator_configs
+            
+            # Actualizar indicadores del dominio si existen
+            if self.indicators:
+                for name, indicator in self.indicators.items():
+                    if name in indicator_configs:
+                        config = indicator_configs[name]
+                        indicator.set_config(
+                            enabled=config.get('enabled', True),
+                            color=config.get('color', '#ffffff'),
+                            line_width=config.get('line_width', 1.5),
+                            **{k: v for k, v in config.items() if k not in ['enabled', 'color', 'line_width']}
+                        )
+            
+            # Aplicar al gráfico
+            self.apply_indicators_to_chart()
+            
+        except Exception as e:
+            self.log_message(f"❌ Error en on_indicators_updated_from_control: {str(e)}")
+    
+    def on_symbol_changed(self, symbol):
+        """Manejador para cambio de símbolo."""
+        self.current_symbol = symbol
+        self.log_message(f"📈 Símbolo cambiado a: {symbol}")
+        
+        # Refrescar datos si está conectado
+        if self.is_connected:
+            self.refresh_market_data()
+    
+    def on_timeframe_changed(self, timeframe):
+        """Manejador para cambio de timeframe."""
+        # Convertir string a TimeFrame
+        if hasattr(TimeFrame, timeframe):
+            self.current_timeframe = getattr(TimeFrame, timeframe)
+        else:
+            # Intentar mapear manualmente
+            timeframe_map = {
+                '1M': TimeFrame.M1, '5M': TimeFrame.M5, '15M': TimeFrame.M15,
+                '30M': TimeFrame.M30, '1H': TimeFrame.H1, '4H': TimeFrame.H4,
+                '1D': TimeFrame.D1, '1W': TimeFrame.W1
+            }
+            self.current_timeframe = timeframe_map.get(timeframe, TimeFrame.H1)
+        
+        self.log_message(f"⏰ Timeframe cambiado a: {timeframe}")
+        
+        # Refrescar datos si está conectado
+        if self.is_connected:
+            self.refresh_market_data()
+    
+    def on_trading_signal(self, order_details):
+        """Manejador para señales de trading."""
+        action = "COMPRA" if 'buy' in str(order_details).lower() else "VENTA"
+        self.log_message(f"📤 Señal de {action} recibida: {order_details}")
+    
     def connect_to_mt5(self):
         """Conectar a MetaTrader 5."""
         try:
@@ -74,7 +356,6 @@ class TradingApp:
             
             self.mt5_use_case = create_connect_to_mt5_use_case(max_retries=3)
             
-            # Esto devuelve un DICCIONARIO
             result = self.mt5_use_case.connect()
             
             # VERIFICACIÓN DE TIPO - IMPORTANTE
@@ -83,7 +364,6 @@ class TradingApp:
                 message = result.get('message', '')
                 data = result.get('data', {})
             else:
-                # Si no es dict, intentar acceder como objeto
                 success = getattr(result, 'success', False)
                 message = getattr(result, 'message', '')
                 data = getattr(result, 'data', {})
@@ -110,6 +390,9 @@ class TradingApp:
                 # Actualizar información
                 self.update_account_info()
                 
+                # Aplicar indicadores a datos reales
+                QTimer.singleShot(500, self.apply_indicators_to_real_data)
+                
                 # Log exitoso
                 if isinstance(data, dict):
                     account_info = data.get('account_info', {})
@@ -118,6 +401,7 @@ class TradingApp:
                 
                 login = account_info.get('login', 'N/A') if isinstance(account_info, dict) else getattr(account_info, 'login', 'N/A')
                 self.log_message(f"✅ Conectado a MT5 - Cuenta: {login}")
+                self.log_message("📈 Aplicando indicadores a datos reales...")
                 
             else:
                 self.update_connection_status(False, f"❌ {message[:30]}")
@@ -137,12 +421,19 @@ class TradingApp:
                 else:
                     self.main_window.btn_connect.setText("🔌 Conectar a MT5")
     
+    def apply_indicators_to_real_data(self):
+        """Aplicar indicadores a datos reales de MT5."""
+        try:
+            if self.is_connected and self.data_use_case:
+                self.refresh_market_data()
+        except Exception as e:
+            self.log_message(f"⚠️ Error aplicando indicadores a datos reales: {str(e)}")
+    
     def disconnect_from_mt5(self):
         """Desconectar de MetaTrader 5."""
         try:
             if self.mt5_use_case:
                 result = self.mt5_use_case.disconnect()
-                # Verificar si el disconnect fue exitoso si devuelve un dict
                 if isinstance(result, dict):
                     success = result.get('success', True)
                     if not success:
@@ -154,7 +445,10 @@ class TradingApp:
             if hasattr(self.main_window, 'btn_connect'):
                 self.main_window.btn_connect.setText("🔌 Conectar a MT5")
             
-            self.log_message("🔌 Desconectado de MT5")
+            # Volver a datos demo con indicadores
+            self.load_demo_data()
+            
+            self.log_message("🔌 Desconectado de MT5 - Volviendo a modo demo")
             
         except Exception as e:
             self.log_message(f"❌ Error desconectando: {str(e)}")
@@ -177,7 +471,6 @@ class TradingApp:
             return
         
         try:
-            # Esto devuelve un DICCIONARIO u objeto
             result = self.mt5_use_case.get_status()
             
             # Manejar tanto dict como objeto
@@ -195,7 +488,7 @@ class TradingApp:
                 else:
                     account_info = getattr(data, 'account_info', {})
                 
-                # Actualizar UI - manejar tanto dict como objeto
+                # Actualizar UI
                 if hasattr(self.main_window, 'lbl_account'):
                     if isinstance(account_info, dict):
                         login = account_info.get('login', '--')
@@ -238,12 +531,12 @@ class TradingApp:
         # Actualizar información de cuenta
         self.update_account_info()
         
-        # Actualizar datos del mercado si existe el caso de uso
+        # Actualizar datos del mercado
         if self.data_use_case:
             self.refresh_market_data()
     
     def refresh_market_data(self):
-        """Obtener y mostrar datos del mercado."""
+        """Obtener y mostrar datos del mercado con indicadores."""
         if not self.is_connected or not self.data_use_case:
             return
         
@@ -267,9 +560,9 @@ class TradingApp:
             if success and data:
                 self.log_message(f"📊 Datos actualizados: {len(data)} velas")
                 
-                # Actualizar gráfico
+                # Actualizar gráfico CON indicadores
                 if hasattr(self.main_window, 'chart_view'):
-                    self.main_window.chart_view.update_chart(data)
+                    self.main_window.chart_view.update_chart(data, self.indicators_config)
                     
             else:
                 self.log_message(f"⚠️ No se pudieron obtener datos: {message}")
@@ -286,6 +579,8 @@ class TradingApp:
             # Log en UI si existe
             if hasattr(self.main_window, 'txt_logs'):
                 self.main_window.txt_logs.append(log_entry)
+            elif hasattr(self.main_window, 'txt_mini_log'):
+                self.main_window.txt_mini_log.append(log_entry)
             
             # Imprimir en consola
             print(log_entry)
@@ -302,10 +597,11 @@ def main():
     """Función principal."""
     try:
         print("=" * 50)
-        print("🚀 INICIANDO US500 TRADING PLATFORM")
+        print("🚀 INICIANDO US500 TRADING PLATFORM CON INDICADORES")
         print("=" * 50)
         print(f"📂 Directorio: {current_dir}")
         print(f"🐍 Python: {sys.version}")
+        print(f"📈 Indicadores disponibles: {INDICATORS_AVAILABLE}")
         print("=" * 50)
         
         app = TradingApp()

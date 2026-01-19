@@ -7,6 +7,10 @@ from PyQt5.QtGui import QColor, QFont, QPen
 import pyqtgraph as pg
 from datetime import datetime, timedelta
 import pandas as pd
+from typing import List, Optional, Dict, Any
+
+# Configurar pyqtgraph para mejor rendimiento
+pg.setConfigOptions(antialias=True)
 
 
 class DateAxis(pg.AxisItem):
@@ -18,7 +22,6 @@ class DateAxis(pg.AxisItem):
         self.tick_positions = []
         self.tick_labels = []
         self.timeframe = "H1"
-        self.grid_lines = []  # Para almacenar líneas del grid
         
     def set_ticks(self, positions, labels, timeframe):
         """Establecer ticks personalizados."""
@@ -31,7 +34,6 @@ class DateAxis(pg.AxisItem):
         """Mostrar etiquetas personalizadas."""
         strings = []
         for v in values:
-            # Buscar la etiqueta más cercana
             if self.tick_positions:
                 idx = min(range(len(self.tick_positions)), 
                          key=lambda i: abs(self.tick_positions[i] - v))
@@ -42,39 +44,191 @@ class DateAxis(pg.AxisItem):
             else:
                 strings.append("")
         return strings
+
+
+class IndicatorPlot(QWidget):
+    """Widget para mostrar indicadores técnicos en gráficos separados."""
     
-    def drawGrid(self, p, axisSpec, tickSpecs):
-        """Dibujar líneas del grid resaltadas para los ticks principales."""
-        super().drawGrid(p, axisSpec, tickSpecs)
+    def __init__(self, parent=None, height: int = 150):
+        super().__init__(parent)
+        self.height = height
+        self.plot_items = []  # Mantener referencia a todos los items
+        self.horizontal_lines = []  # Líneas horizontales fijas
+        self.init_ui()
         
-        # Dibujar líneas del grid más visibles para los ticks principales
-        if not hasattr(self, 'linkedView'):
-            return
-            
-        view_box = self.linkedView()
-        if not view_box:
-            return
-            
-        # Obtener el rango visible del eje Y
-        _, y_range = view_box.viewRange()
-        y_min, y_max = y_range
+    def init_ui(self):
+        """Inicializar la interfaz de usuario."""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         
-        # Crear un pen más visible para las líneas del grid principales
-        grid_pen = QPen(QColor(100, 100, 200, 100))  # Azul más visible
-        grid_pen.setWidth(1.5)
-        p.setPen(grid_pen)
+        # Gráfico para indicadores
+        self.plot = pg.PlotWidget()
+        self.plot.setBackground('#0a0a0a')
+        self.plot.setMinimumHeight(self.height)
+        self.plot.setMaximumHeight(self.height)
+        self.plot.setLabel('left', 'Valor')
+        self.plot.showGrid(x=True, y=True, alpha=0.2)
+        self.plot.setMouseEnabled(x=True, y=True)
+        self.plot.setMenuEnabled(False)
         
-        # Dibujar líneas verticales en las posiciones de los ticks principales
-        for tick_pos, _ in self.ticks:
-            # Convertir posición del tick a píxeles
-            tick_pixel = self.mapToView(tick_pos, 0).x()
-            if tick_pixel is not None:
-                # Dibujar línea vertical
-                p.drawLine(int(tick_pixel), int(y_min), int(tick_pixel), int(y_max))
+        # Configurar colores de ejes
+        self.plot.getAxis('left').setPen(pg.mkPen(color='#666'))
+        self.plot.getAxis('bottom').setPen(pg.mkPen(color='#666'))
+        
+        layout.addWidget(self.plot)
+    
+    def clear(self):
+        """Limpiar el gráfico completamente."""
+        self.plot.clear()
+        self.plot_items = []
+        # Re-crear líneas horizontales si existen
+        for hline in self.horizontal_lines:
+            line = pg.InfiniteLine(
+                pos=hline['pos'],
+                angle=0,
+                pen=pg.mkPen(color=hline['color'], style=hline['style'], width=hline['width'])
+            )
+            self.plot.addItem(line)
+            self.plot_items.append(line)
+    
+    def clear_all(self):
+        """Limpiar todo incluyendo líneas horizontales."""
+        self.plot.clear()
+        self.plot_items = []
+        self.horizontal_lines = []
+    
+    def set_x_link(self, other_plot):
+        """Vincular eje X con otro gráfico."""
+        self.plot.setXLink(other_plot)
+    
+    def plot_indicator(self, x_data, y_data, color='#ffffff', name='', width=2, style=Qt.SolidLine):
+        """Graficar un indicador."""
+        if len(x_data) == 0 or len(y_data) == 0:
+            return None
+        
+        # Filtrar valores NaN
+        valid_mask = ~np.isnan(y_data)
+        if not np.any(valid_mask):
+            return None
+        
+        x_valid = x_data[valid_mask]
+        y_valid = y_data[valid_mask]
+        
+        # Crear línea del indicador
+        line = pg.PlotCurveItem(
+            x=x_valid,
+            y=y_valid,
+            pen=pg.mkPen(color=color, width=width, style=style)
+        )
+        self.plot.addItem(line)
+        self.plot_items.append(line)
+        
+        # Agregar etiqueta con el nombre
+        if name and len(x_valid) > 0:
+            # Crear etiqueta al final de la línea
+            label = pg.TextItem(
+                text=name,
+                color=color,
+                anchor=(0, 1),
+                fill=pg.mkBrush(color=(10, 10, 10, 200))
+            )
+            label.setPos(x_valid[-1], y_valid[-1])
+            self.plot.addItem(label)
+            self.plot_items.append(label)
+        
+        return line
+    
+    def add_hline(self, y_value, color='#666666', style=Qt.DashLine, width=1, label=None):
+        """Agregar línea horizontal permanente con etiqueta opcional."""
+        line = pg.InfiniteLine(
+            pos=y_value,
+            angle=0,
+            pen=pg.mkPen(color=color, style=style, width=width)
+        )
+        self.plot.addItem(line)
+        self.plot_items.append(line)
+        
+        # Agregar etiqueta si se proporciona
+        if label:
+            text_item = pg.TextItem(
+                text=label,
+                color=color,
+                anchor=(1, 0),
+                fill=pg.mkBrush(color=(10, 10, 10, 150))
+            )
+            text_item.setPos(self.plot.getViewBox().viewRange()[0][1] * 0.95, y_value)
+            self.plot.addItem(text_item)
+            self.plot_items.append(text_item)
+        
+        # Guardar referencia para re-crear después de clear()
+        self.horizontal_lines.append({
+            'pos': y_value,
+            'color': color,
+            'style': style,
+            'width': width,
+            'label': label
+        })
+        
+        return line
+    
+    def plot_histogram(self, x_data, y_data, width=0.6):
+        """Graficar histograma para MACD."""
+        if len(x_data) == 0 or len(y_data) == 0:
+            return []
+        
+        # Filtrar valores NaN
+        valid_mask = ~np.isnan(y_data)
+        if not np.any(valid_mask):
+            return []
+        
+        x_valid = x_data[valid_mask]
+        y_valid = y_data[valid_mask]
+        
+        # Preparar datos para BarGraphItem
+        x_centers = x_valid
+        heights = y_valid
+        width = width
+        
+        # Crear colores basados en valores positivos/negativos
+        brushes = []
+        pens = []
+        for y in y_valid:
+            if y >= 0:
+                brushes.append(pg.mkBrush(color='#00ff00'))
+                pens.append(pg.mkPen(color='#00ff00', width=0.5))
+            else:
+                brushes.append(pg.mkBrush(color='#ff0000'))
+                pens.append(pg.mkPen(color='#ff0000', width=0.5))
+        
+        # Crear histograma como un solo BarGraphItem para mejor performance
+        bars = pg.BarGraphItem(
+            x=x_centers,
+            height=heights,
+            width=width,
+            brushes=brushes,
+            pens=pens
+        )
+        self.plot.addItem(bars)
+        self.plot_items.append(bars)
+        
+        return [bars]
+    
+    def set_y_range(self, min_val, max_val, padding=0.1):
+        """Establecer rango del eje Y."""
+        if min_val != max_val:
+            margin = (max_val - min_val) * padding
+            self.plot.setYRange(min_val - margin, max_val + margin)
+        else:
+            self.plot.setYRange(min_val - 1, min_val + 1)
+    
+    def get_view_x_range(self):
+        """Obtener rango actual del eje X."""
+        return self.plot.getViewBox().viewRange()[0]
 
 
 class ChartView(QWidget):
-    """Widget para gráficos de trading con velas japonesas."""
+    """Widget para gráficos de trading con velas japonesas y indicadores."""
     
     # Señales
     symbol_changed = pyqtSignal(str)
@@ -89,25 +243,43 @@ class ChartView(QWidget):
         self.candles_data = []
         self.symbol_info = {}
         self.server_time = None
-        self.x_positions = []  # Posiciones X sin gaps
-        self.x_dates = []      # Fechas correspondientes
+        self.x_positions = []
+        self.x_dates = []
         
         # Variables para el señalador
-        self.price_cross = None  # Cruz para mostrar el precio actual
-        self.cross_h_line = None  # Línea horizontal de la cruz
-        self.cross_v_line = None  # Línea vertical de la cruz
-        self.cross_label = None  # Etiqueta de precio
+        self.price_cross = None
+        self.cross_h_line = None
+        self.cross_v_line = None
+        self.cross_label = None
         self.last_bid = None
         
-        # Color fijo para la cruz (azul)
-        self.cross_color = QColor(0, 150, 255, 220)  # Azul
+        # Color fijo para la cruz
+        self.cross_color = QColor(0, 150, 255, 220)
         
         # Variables para la posición de la cruz
         self.current_cross_x = None
         self.current_cross_y = None
         
-        # MODIFICACIÓN: Reducir el ancho mínimo del widget
-        self.setMinimumSize(1000, 700)  # Cambiado de 1400,700 a 1000,700
+        # Configuración de indicadores
+        self.indicators_config = {}
+        self.indicator_plots = {}
+        
+        # Diccionario para mantener referencias a los indicadores dibujados
+        self.drawn_indicators = {
+            'sma': None,
+            'ema': None,
+            'bb_upper': None,
+            'bb_middle': None,
+            'bb_lower': None,
+            'rsi': None,
+            'macd_line': None,
+            'macd_signal': None,
+            'macd_histogram': None,
+            'stoch_k': None,
+            'stoch_d': None
+        }
+        
+        self.setMinimumSize(1000, 700)
         
         # Inicializar UI
         self.init_ui()
@@ -120,9 +292,6 @@ class ChartView(QWidget):
         
     def init_ui(self):
         """Inicializar la interfaz de usuario."""
-        # Tamaño ya configurado en __init__
-        
-        # Layout principal
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(1)
@@ -131,17 +300,88 @@ class ChartView(QWidget):
         self.create_top_bar()
         main_layout.addWidget(self.top_bar_widget)
         
-        # 2. Widget de gráfico
-        self.graph_widget = pg.GraphicsLayoutWidget()
-        self.graph_widget.setBackground('#0a0a0a')
-        # MODIFICACIÓN: Reducir el ancho máximo del widget gráfico
-        self.graph_widget.setMaximumWidth(950)
-        main_layout.addWidget(self.graph_widget, 1)
+        # 2. Contenedor para gráficos
+        self.graphs_container = QWidget()
+        self.graphs_layout = QVBoxLayout(self.graphs_container)
+        self.graphs_layout.setContentsMargins(0, 0, 0, 0)
+        self.graphs_layout.setSpacing(1)
+        main_layout.addWidget(self.graphs_container, 1)
         
-        # 3. Barra inferior de precios e información
+        # 3. Barra inferior
         self.create_info_bar()
         main_layout.addWidget(self.info_bar_widget)
         
+    def init_chart(self):
+        """Inicializar el gráfico principal."""
+        self.date_axis = DateAxis(orientation='bottom')
+        
+        # Crear plot para velas
+        self.main_plot = pg.GraphicsLayoutWidget()
+        self.main_plot.setBackground('#0a0a0a')
+        self.candle_plot = self.main_plot.addPlot(row=0, col=0, title="", axisItems={'bottom': self.date_axis})
+        self.candle_plot.setLabel('left', 'Precio', color='#aaa')
+        self.candle_plot.setLabel('bottom', 'Tiempo', color='#aaa')
+        
+        # Configurar grid
+        self.candle_plot.showGrid(x=True, y=True, alpha=0.3)
+        self.candle_plot.getAxis('bottom').setGrid(255)
+        self.candle_plot.getAxis('left').setGrid(255)
+        self.candle_plot.setMouseEnabled(x=True, y=True)
+        self.candle_plot.setMenuEnabled(False)
+        
+        # Configurar colores para velas
+        self.up_color = QColor(0, 255, 0, 200)
+        self.down_color = QColor(255, 0, 0, 200)
+        
+        # Ajustar márgenes
+        self.candle_plot.layout.setContentsMargins(40, 5, 8, 40)
+        
+        # Control de visibilidad de etiquetas
+        self.show_date_labels = True
+        
+        # Configurar fuente
+        font = QFont('Arial', 8)
+        self.date_axis.setTickFont(font)
+        
+        # Añadir el gráfico principal
+        self.graphs_layout.addWidget(self.main_plot, 3)
+        
+        # Crear gráficos para indicadores
+        self.create_indicator_plots()
+        
+        # Conectar señales de movimiento del ratón para actualizar la cruz
+        self.candle_plot.scene().sigMouseMoved.connect(self.on_mouse_moved)
+    
+    def create_indicator_plots(self):
+        """Crear gráficos separados para indicadores técnicos."""
+        # Gráfico para RSI
+        self.rsi_plot = IndicatorPlot(self, height=120)
+        self.rsi_plot.setVisible(False)
+        self.rsi_plot.plot.setLabel('left', 'RSI')
+        self.rsi_plot.plot.setXLink(self.candle_plot)
+        self.graphs_layout.addWidget(self.rsi_plot, 1)
+        
+        # Gráfico para MACD
+        self.macd_plot = IndicatorPlot(self, height=120)
+        self.macd_plot.setVisible(False)
+        self.macd_plot.plot.setLabel('left', 'MACD')
+        self.macd_plot.plot.setXLink(self.candle_plot)
+        self.graphs_layout.addWidget(self.macd_plot, 1)
+        
+        # Gráfico para Stochastic
+        self.stoch_plot = IndicatorPlot(self, height=120)
+        self.stoch_plot.setVisible(False)
+        self.stoch_plot.plot.setLabel('left', 'Stochastic')
+        self.stoch_plot.plot.setXLink(self.candle_plot)
+        self.graphs_layout.addWidget(self.stoch_plot, 1)
+        
+        # Registrar gráficos
+        self.indicator_plots = {
+            'rsi': self.rsi_plot,
+            'macd': self.macd_plot,
+            'stochastic': self.stoch_plot
+        }
+    
     def create_top_bar(self):
         """Crear barra superior de controles."""
         self.top_bar_widget = QWidget()
@@ -181,10 +421,16 @@ class ChartView(QWidget):
         self.btn_toggle_labels.toggled.connect(self.toggle_date_labels)
         self.btn_toggle_labels.setFixedWidth(120)
         
+        # Botón para alternar indicadores
+        self.btn_toggle_indicators = QPushButton("📈 Indicadores")
+        self.btn_toggle_indicators.setCheckable(True)
+        self.btn_toggle_indicators.setChecked(False)
+        self.btn_toggle_indicators.toggled.connect(self.toggle_indicators)
+        self.btn_toggle_indicators.setFixedWidth(120)
+        
         # Información del símbolo
         self.lbl_symbol_info = QLabel("Dígitos: -- | Punto: -- | Spread: --")
         self.lbl_symbol_info.setStyleSheet("color: #aaa; font-size: 11px;")
-        # MODIFICACIÓN: Reducir ancho para acomodar espacio reducido
         self.lbl_symbol_info.setFixedWidth(250)
         
         # Hora del servidor
@@ -195,7 +441,6 @@ class ChartView(QWidget):
         # Etiqueta de estado
         self.status_label = QLabel("Cargando datos...")
         self.status_label.setStyleSheet("color: #888; font-size: 11px; padding-left: 8px;")
-        # MODIFICACIÓN: Reducir ancho para espacio reducido
         self.status_label.setFixedWidth(350)
         
         # Separador
@@ -212,6 +457,7 @@ class ChartView(QWidget):
         top_layout.addWidget(separator)
         top_layout.addWidget(self.btn_zoom_fit)
         top_layout.addWidget(self.btn_toggle_labels)
+        top_layout.addWidget(self.btn_toggle_indicators)
         top_layout.addWidget(separator)
         top_layout.addWidget(self.lbl_symbol_info)
         top_layout.addWidget(self.lbl_server_time)
@@ -241,31 +487,26 @@ class ChartView(QWidget):
         # Precio BID
         self.bid_label = QLabel("BID: --")
         self.bid_label.setStyleSheet("color: #0af; font-weight: bold; font-size: 13px;")
-        # MODIFICACIÓN: Reducir ancho para espacio reducido
         self.bid_label.setFixedWidth(120)
         
         # Precio ASK
         self.ask_label = QLabel("ASK: --")
         self.ask_label.setStyleSheet("color: #f0a; font-weight: bold; font-size: 13px;")
-        # MODIFICACIÓN: Reducir ancho para espacio reducido
         self.ask_label.setFixedWidth(120)
         
         # Spread
         self.spread_label = QLabel("Spread: --")
         self.spread_label.setStyleSheet("color: #fff; font-weight: bold; font-size: 13px;")
-        # MODIFICACIÓN: Reducir ancho para espacio reducido
         self.spread_label.setFixedWidth(120)
         
         # Cambio
         self.change_label = QLabel("Cambio: --")
         self.change_label.setStyleSheet("color: #aaa; font-size: 12px;")
-        # MODIFICACIÓN: Reducir ancho para espacio reducido
         self.change_label.setFixedWidth(120)
         
-        # Indicador de precio actual en el gráfico
+        # Indicador de precio actual
         self.price_indicator_label = QLabel("Precio actual: --")
         self.price_indicator_label.setStyleSheet("color: #0af; font-weight: bold; font-size: 11px;")
-        # MODIFICACIÓN: Reducir ancho para espacio reducido
         self.price_indicator_label.setFixedWidth(150)
         
         # Tiempo local vs servidor
@@ -283,6 +524,11 @@ class ChartView(QWidget):
         time_layout.addWidget(self.lbl_time_diff)
         time_group.setFixedWidth(100)
         
+        # Indicadores activos
+        self.active_indicators_label = QLabel("Indicadores: --")
+        self.active_indicators_label.setStyleSheet("color: #ff9900; font-size: 11px;")
+        self.active_indicators_label.setFixedWidth(150)
+        
         # Agregar widgets
         info_layout.addWidget(price_scale_group)
         info_layout.addWidget(self.bid_label)
@@ -290,60 +536,46 @@ class ChartView(QWidget):
         info_layout.addWidget(self.spread_label)
         info_layout.addWidget(self.change_label)
         info_layout.addWidget(self.price_indicator_label)
+        info_layout.addWidget(self.active_indicators_label)
         info_layout.addWidget(time_group)
         info_layout.addStretch()
+    
+    def on_mouse_moved(self, pos):
+        """Manejar movimiento del ratón para mostrar precio en posición actual."""
+        if not self.candle_plot.sceneBoundingRect().contains(pos):
+            return
         
-    def init_chart(self):
-        """Inicializar el gráfico principal."""
-        # Usar nuestro eje personalizado para fechas
-        self.date_axis = DateAxis(orientation='bottom')
+        # Convertir posición del ratón a coordenadas del gráfico
+        mouse_point = self.candle_plot.vb.mapSceneToView(pos)
+        x_pos = mouse_point.x()
         
-        # Crear plot para velas
-        self.main_plot = self.graph_widget.addPlot(row=0, col=0, title="", axisItems={'bottom': self.date_axis})
-        self.main_plot.setLabel('left', 'Precio', color='#aaa')
-        self.main_plot.setLabel('bottom', 'Tiempo', color='#aaa')
-        
-        # Configurar grid - más visible
-        self.main_plot.showGrid(x=True, y=True, alpha=0.3)
-        
-        # Configurar líneas del grid para que sean más visibles
-        self.main_plot.getAxis('bottom').setGrid(255)
-        self.main_plot.getAxis('left').setGrid(255)
-        
-        self.main_plot.setMouseEnabled(x=True, y=True)
-        self.main_plot.setMenuEnabled(False)
-        
-        # Configurar colores para velas
-        self.up_color = QColor(0, 255, 0, 200)
-        self.down_color = QColor(255, 0, 0, 200)
-        
-        # MODIFICACIÓN: Ajustar márgenes para aprovechar mejor el espacio reducido
-        self.main_plot.layout.setContentsMargins(40, 5, 8, 40)  # Reducidos márgenes laterales
-        
-        # Control de visibilidad de etiquetas
-        self.show_date_labels = True
-        
-        # Configurar fuente para etiquetas del eje X
-        font = QFont('Arial', 8)
-        self.date_axis.setTickFont(font)
-        
-        # MODIFICACIÓN: Reducir ancho mínimo del widget gráfico
-        self.graph_widget.setMinimumWidth(900)
-        
-        # MODIFICACIÓN: Configurar márgenes para reducir espacio en blanco
-        self.main_plot.setContentsMargins(10, 5, 10, 5)
+        # Encontrar la vela más cercana
+        if len(self.x_positions) > 0:
+            # Buscar el índice más cercano
+            idx = np.argmin(np.abs(np.array(self.x_positions) - x_pos))
+            if idx < len(self.x_positions):
+                # Mostrar precio en la barra inferior
+                if hasattr(self, 'candles_data') and idx < len(self.candles_data):
+                    candle = self.candles_data[idx]
+                    price = float(candle.close)
+                    
+                    if self.symbol_info:
+                        digits = self.symbol_info.get('digits', 5)
+                        price_text = f"{price:.{digits}f}"
+                    else:
+                        price_text = f"{price:.5f}"
+                    
+                    self.price_indicator_label.setText(f"Posición: {price_text}")
     
     def create_price_cross(self, x_pos, y_pos):
         """Crear una cruz azul sutil en la posición indicada."""
-        # Si ya existe, eliminarla primero
         if self.cross_h_line:
-            self.main_plot.removeItem(self.cross_h_line)
+            self.candle_plot.removeItem(self.cross_h_line)
         if self.cross_v_line:
-            self.main_plot.removeItem(self.cross_v_line)
+            self.candle_plot.removeItem(self.cross_v_line)
         if self.cross_label:
-            self.main_plot.removeItem(self.cross_label)
+            self.candle_plot.removeItem(self.cross_label)
         
-        # Longitud de los brazos de la cruz
         cross_length = 0.3
         
         # Crear línea horizontal
@@ -377,32 +609,27 @@ class ChartView(QWidget):
         )
         self.cross_label.setZValue(101)
         
-        # Agregar elementos al gráfico
-        self.main_plot.addItem(self.cross_h_line)
-        self.main_plot.addItem(self.cross_v_line)
-        self.main_plot.addItem(self.cross_label)
+        # Agregar elementos
+        self.candle_plot.addItem(self.cross_h_line)
+        self.candle_plot.addItem(self.cross_v_line)
+        self.candle_plot.addItem(self.cross_label)
         
         # Posicionar etiqueta
         label_offset_x = 0.25
         label_offset_y = cross_length + 0.15
         self.cross_label.setPos(x_pos + label_offset_x, y_pos + label_offset_y)
         
-        # Guardar posición actual
         self.current_cross_x = x_pos
         self.current_cross_y = y_pos
     
     def update_price_cross(self, price):
-        """Actualizar la cruz azul con el precio actual en la última vela."""
+        """Actualizar la cruz azul con el precio actual."""
         if self.x_positions is None or len(self.x_positions) == 0:
             return
         
-        # Posición X: última vela
         last_candle_x = self.x_positions[-1] if self.x_positions else 0
-        
-        # Crear o actualizar la cruz
         self.create_price_cross(last_candle_x, price)
         
-        # Actualizar etiqueta en la barra inferior
         if self.symbol_info:
             digits = self.symbol_info.get('digits', 5)
             price_text = f"{price:.{digits}f}"
@@ -418,19 +645,24 @@ class ChartView(QWidget):
         if hasattr(self, 'candles_data') and self.candles_data:
             self.refresh_chart()
     
+    def toggle_indicators(self, checked):
+        """Alternar visibilidad de los indicadores."""
+        if checked and self.candles_data and self.indicators_config:
+            self.apply_indicators_to_chart()
+        else:
+            self.hide_all_indicators()
+    
     def prepare_candle_data(self, candles):
-        """Preparar datos de velas ELIMINANDO GAPS entre días/trading."""
+        """Preparar datos de velas eliminando gaps."""
         if not candles:
             return (np.array([]), np.array([]), np.array([]), 
                     np.array([]), np.array([]), np.array([]))
         
-        # Ordenar velas por tiempo
         sorted_candles = sorted(candles, key=lambda x: 
             x.timestamp if hasattr(x, 'timestamp') else 
             x.time if hasattr(x, 'time') else 
             datetime.now())
         
-        # Crear índices continuos (eliminar gaps)
         x_positions = []
         x_dates = []
         opens = []
@@ -439,15 +671,12 @@ class ChartView(QWidget):
         closes = []
         volumes = []
         
-        # Usar índice incremental para eliminar espacios vacíos
         current_x = 0
         
-        for i, candle in enumerate(sorted_candles):
-            # Posición X continua (sin gaps)
+        for candle in sorted_candles:
             x_positions.append(current_x)
             current_x += 1
             
-            # Guardar fecha para etiquetas
             if hasattr(candle, 'timestamp'):
                 dt = candle.timestamp
             elif hasattr(candle, 'time'):
@@ -456,19 +685,16 @@ class ChartView(QWidget):
                 dt = datetime.now()
             x_dates.append(dt)
             
-            # Precios
             opens.append(float(candle.open))
             highs.append(float(candle.high))
             lows.append(float(candle.low))
             closes.append(float(candle.close))
             
-            # Volumen
             if hasattr(candle, 'volume'):
                 volumes.append(float(candle.volume))
             else:
                 volumes.append(0)
         
-        # Guardar para uso posterior
         self.x_positions = x_positions
         self.x_dates = x_dates
         
@@ -486,42 +712,34 @@ class ChartView(QWidget):
         if len(times) == 0:
             return
         
-        # Ancho de vela fijo para espaciado uniforme
         candle_width = 0.5
+        self.candle_plot.clear()
         
-        # Limpiar el gráfico
-        self.main_plot.clear()
-        
-        # Dibujar todas las velas
         for i in range(len(times)):
-            # Determinar color
             is_bullish = closes[i] >= opens[i]
             color = self.up_color if is_bullish else self.down_color
             
-            # Dibujar mecha (línea de alto a bajo)
+            # Dibujar mecha
             wick = pg.PlotCurveItem(
                 x=np.array([times[i], times[i]], dtype=np.float64),
                 y=np.array([lows[i], highs[i]], dtype=np.float64),
                 pen=pg.mkPen(color=color, width=1.5)
             )
-            self.main_plot.addItem(wick)
+            self.candle_plot.addItem(wick)
             
-            # Dibujar cuerpo (rectángulo open-close)
+            # Dibujar cuerpo
             body_top = max(opens[i], closes[i])
             body_bottom = min(opens[i], closes[i])
             body_height = abs(closes[i] - opens[i])
             
-            # Asegurar altura mínima para cuerpos muy pequeños
             min_body_height = (max(highs) - min(lows)) * 0.002 if len(highs) > 0 else 0.0001
             if body_height < min_body_height:
                 body_height = min_body_height
-                # Ajustar posición para mantener centro
                 if is_bullish:
                     body_bottom = (opens[i] + closes[i]) / 2 - body_height/2
                 else:
                     body_top = (opens[i] + closes[i]) / 2 + body_height/2
             
-            # Crear rectángulo para el cuerpo
             body = pg.QtWidgets.QGraphicsRectItem(
                 times[i] - candle_width/2,
                 body_bottom,
@@ -530,21 +748,18 @@ class ChartView(QWidget):
             )
             body.setBrush(pg.mkBrush(color))
             body.setPen(pg.mkPen(color))
-            self.main_plot.addItem(body)
+            self.candle_plot.addItem(body)
         
-        # Configurar eje X con etiquetas para cada vela
         self.configure_x_axis_with_dates()
         
-        # Si hay un precio actual, dibujar la cruz azul en la última vela
         if self.last_bid is not None and len(times) > 0:
             self.update_price_cross(self.last_bid)
     
     def configure_x_axis_with_dates(self):
-        """Configurar eje X para mostrar exactamente 20 fechas con formato completo."""
+        """Configurar eje X para mostrar fechas."""
         if not self.x_positions or not self.x_dates or not self.show_date_labels:
             return
         
-        # Crear exactamente 20 etiquetas
         tick_positions = []
         tick_labels = []
         
@@ -552,24 +767,18 @@ class ChartView(QWidget):
         target_labels = 20
         
         if n_candles <= target_labels:
-            # Si hay menos velas que etiquetas deseadas, mostrar todas
             step = 1
             indices = range(0, n_candles)
         else:
-            # Calcular paso para obtener exactamente 20 etiquetas
             step = max(1, n_candles // (target_labels - 1))
-            
-            # Asegurar que siempre incluimos la primera y última
-            indices = [0]  # Primera siempre
+            indices = [0]
             for i in range(step, n_candles - 1, step):
                 if len(indices) < target_labels - 1:
                     indices.append(i)
             
-            # Última siempre
             if n_candles > 1:
                 indices.append(n_candles - 1)
         
-        # Crear etiquetas
         for idx in indices:
             if idx < len(self.x_positions) and idx < len(self.x_dates):
                 dt = self.x_dates[idx]
@@ -592,24 +801,20 @@ class ChartView(QWidget):
                     tick_positions.append(self.x_positions[i])
                     tick_labels.append(label)
         
-        # Ordenar las posiciones
         sorted_indices = np.argsort(tick_positions)
         tick_positions = [tick_positions[i] for i in sorted_indices]
         tick_labels = [tick_labels[i] for i in sorted_indices]
         
-        # Configurar eje X personalizado
         self.date_axis.set_ticks(tick_positions, tick_labels, self.current_timeframe)
         
-        # Configurar rango del eje X con márgenes
         if len(self.x_positions) > 0:
             x_min = min(self.x_positions) - 1
             x_max = max(self.x_positions) + 1
-            self.main_plot.setXRange(x_min, x_max)
+            self.candle_plot.setXRange(x_min, x_max)
     
     def format_date_for_label(self, dt):
-        """Formatear fecha para la etiqueta del eje X - Formato completo."""
+        """Formatear fecha para la etiqueta del eje X."""
         if isinstance(dt, datetime):
-            # Formato completo: YYYY/MM/DD HH:MM:SS
             return dt.strftime('%Y/%m/%d %H:%M:%S')
         else:
             try:
@@ -623,36 +828,30 @@ class ChartView(QWidget):
         if not self.candles_data:
             return
         
-        # Preparar datos para obtener rangos
         times, opens, highs, lows, closes, volumes = self.prepare_candle_data(self.candles_data)
         
         if len(times) > 0:
-            # Margen horizontal ajustado
             x_margin = max(1.0, len(times) * 0.02)
             
-            # Obtener rango de precios
             all_prices = np.concatenate([opens, highs, lows, closes])
             min_price = np.min(all_prices)
             max_price = np.max(all_prices)
             
-            # Ajustar rango para incluir la cruz del precio actual
             if self.current_cross_y is not None:
                 min_price = min(min_price, self.current_cross_y)
                 max_price = max(max_price, self.current_cross_y)
             
-            # Margen vertical (5% del rango)
             if min_price != max_price:
                 price_margin = (max_price - min_price) * 0.05
             else:
                 price_margin = abs(min_price) * 0.01 if min_price != 0 else 1.0
             
-            # Establecer rangos
-            self.main_plot.setXRange(min(times) - x_margin, max(times) + x_margin)
-            self.main_plot.setYRange(min_price - price_margin, max_price + price_margin)
+            self.candle_plot.setXRange(min(times) - x_margin, max(times) + x_margin)
+            self.candle_plot.setYRange(min_price - price_margin, max_price + price_margin)
     
     @pyqtSlot(dict)
     def update_price_display(self, price_data):
-        """Actualizar display de precios en tiempo real y la cruz azul."""
+        """Actualizar display de precios en tiempo real."""
         if not price_data:
             return
         
@@ -673,7 +872,6 @@ class ChartView(QWidget):
             
             self.spread_label.setText(f"Spread: {spread:.1f} pips")
             
-            # Calcular cambio
             if self.last_bid is not None:
                 change = ((bid - self.last_bid) / self.last_bid) * 100
                 change_text = f"{change:+.2f}%"
@@ -684,51 +882,479 @@ class ChartView(QWidget):
                     self.change_label.setText(f"▼ {change_text}")
                     self.change_label.setStyleSheet("color: #ff0000; font-weight: bold;")
             
-            # Actualizar cruz azul del precio en la última vela
             self.update_price_cross(bid)
-            
             self.last_bid = bid
     
-    def update_chart(self, candles, real_time_data=None, symbol_info=None, server_time=None):
+    @pyqtSlot(dict)
+    def update_indicator_settings(self, indicators_config: Dict):
+        """Actualizar configuración de indicadores."""
+        self.indicators_config = indicators_config
+        
+        if self.btn_toggle_indicators.isChecked():
+            self.apply_indicators_to_chart()
+        
+        self.update_active_indicators_label()
+    
+    def update_active_indicators_label(self):
+        """Actualizar etiqueta de indicadores activos."""
+        if not self.indicators_config:
+            self.active_indicators_label.setText("Indicadores: --")
+            return
+        
+        active_indicators = []
+        for name, config in self.indicators_config.items():
+            if config.get('enabled', False):
+                if name == 'sma':
+                    active_indicators.append(f"SMA{config.get('period', '')}")
+                elif name == 'ema':
+                    active_indicators.append(f"EMA{config.get('period', '')}")
+                elif name == 'rsi':
+                    active_indicators.append(f"RSI{config.get('period', '')}")
+                elif name == 'macd':
+                    active_indicators.append(f"MACD")
+                elif name == 'bollinger':
+                    active_indicators.append(f"BB")
+                elif name == 'stochastic':
+                    active_indicators.append(f"STOCH")
+        
+        if active_indicators:
+            self.active_indicators_label.setText(f"Indicadores: {', '.join(active_indicators)}")
+        else:
+            self.active_indicators_label.setText("Indicadores: Ninguno")
+    
+    def apply_indicators_to_chart(self):
+        """Aplicar indicadores al gráfico."""
+        if not self.candles_data or not self.indicators_config:
+            return
+        
+        x_positions, opens, highs, lows, closes, volumes = self.prepare_candle_data(self.candles_data)
+        
+        # Calcular y dibujar indicadores
+        self.calculate_and_draw_indicators(x_positions, opens, highs, lows, closes)
+    
+    def hide_all_indicators(self):
+        """Ocultar todos los indicadores."""
+        # Ocultar gráficos de indicadores
+        for plot in self.indicator_plots.values():
+            plot.setVisible(False)
+        
+        # Limpiar indicadores del gráfico principal
+        items_to_remove = []
+        for item in self.candle_plot.items:
+            if hasattr(item, 'name') and item.name in ['sma', 'ema', 'bb_upper', 'bb_middle', 'bb_lower']:
+                items_to_remove.append(item)
+        
+        for item in items_to_remove:
+            self.candle_plot.removeItem(item)
+    
+    def clear_indicator_plots(self):
+        """Limpiar todos los gráficos de indicadores."""
+        for plot in self.indicator_plots.values():
+            plot.clear_all()
+    
+    def calculate_and_draw_indicators(self, x_positions, opens, highs, lows, closes):
+        """Calcular y dibujar indicadores técnicos."""
+        if len(closes) == 0:
+            return
+        
+        x_array = np.array(x_positions, dtype=np.float64)
+        closes_array = np.array(closes, dtype=np.float64)
+        highs_array = np.array(highs, dtype=np.float64)
+        lows_array = np.array(lows, dtype=np.float64)
+        
+        # Limpiar gráficos de indicadores
+        self.clear_indicator_plots()
+        
+        # 1. SMA (gráfico principal)
+        if self.indicators_config.get('sma', {}).get('enabled', False):
+            period = self.indicators_config['sma'].get('period', 20)
+            color = self.indicators_config['sma'].get('color', '#ffff00')
+            self.draw_sma(x_array, closes_array, period, color)
+        
+        # 2. EMA (gráfico principal)
+        if self.indicators_config.get('ema', {}).get('enabled', False):
+            period = self.indicators_config['ema'].get('period', 12)
+            color = self.indicators_config['ema'].get('color', '#ff00ff')
+            self.draw_ema(x_array, closes_array, period, color)
+        
+        # 3. Bollinger Bands (gráfico principal)
+        if self.indicators_config.get('bollinger', {}).get('enabled', False):
+            period = self.indicators_config['bollinger'].get('period', 20)
+            std = self.indicators_config['bollinger'].get('std', 2.0)
+            self.draw_bollinger_bands(x_array, closes_array, period, std)
+        
+        # 4. RSI
+        if self.indicators_config.get('rsi', {}).get('enabled', False):
+            period = self.indicators_config['rsi'].get('period', 14)
+            overbought = self.indicators_config['rsi'].get('overbought', 80)
+            oversold = self.indicators_config['rsi'].get('oversold', 20)
+            color = self.indicators_config['rsi'].get('color', '#ffaa00')
+            self.draw_rsi(x_array, closes_array, period, overbought, oversold, color)
+        
+        # 5. MACD
+        if self.indicators_config.get('macd', {}).get('enabled', False):
+            fast = self.indicators_config['macd'].get('fast', 12)
+            slow = self.indicators_config['macd'].get('slow', 26)
+            signal = self.indicators_config['macd'].get('signal', 9)
+            self.draw_macd_corrected(x_array, closes_array, fast, slow, signal)
+        
+        # 6. Stochastic
+        if self.indicators_config.get('stochastic', {}).get('enabled', False):
+            k_period = self.indicators_config['stochastic'].get('k_period', 14)
+            d_period = self.indicators_config['stochastic'].get('d_period', 3)
+            slowing = self.indicators_config['stochastic'].get('slowing', 3)
+            self.draw_stochastic_with_labels(x_array, highs_array, lows_array, closes_array, 
+                                           k_period, d_period, slowing)
+    
+    def draw_sma(self, x_data, closes, period, color):
+        """Dibujar Media Móvil Simple."""
+        if len(closes) < period:
+            return
+        
+        sma = np.full_like(closes, np.nan)
+        for i in range(period - 1, len(closes)):
+            sma[i] = np.mean(closes[i - period + 1:i + 1])
+        
+        valid_mask = ~np.isnan(sma)
+        if np.any(valid_mask):
+            sma_line = pg.PlotCurveItem(
+                x=x_data[valid_mask],
+                y=sma[valid_mask],
+                pen=pg.mkPen(color=color, width=2),
+                name='sma'
+            )
+            self.candle_plot.addItem(sma_line)
+            self.drawn_indicators['sma'] = sma_line
+    
+    def draw_ema(self, x_data, closes, period, color):
+        """Dibujar Media Móvil Exponencial."""
+        if len(closes) < period:
+            return
+        
+        ema = np.full_like(closes, np.nan)
+        multiplier = 2 / (period + 1)
+        
+        sma = np.mean(closes[:period])
+        ema[period - 1] = sma
+        
+        for i in range(period, len(closes)):
+            ema[i] = (closes[i] - ema[i - 1]) * multiplier + ema[i - 1]
+        
+        valid_mask = ~np.isnan(ema)
+        if np.any(valid_mask):
+            ema_line = pg.PlotCurveItem(
+                x=x_data[valid_mask],
+                y=ema[valid_mask],
+                pen=pg.mkPen(color=color, width=2),
+                name='ema'
+            )
+            self.candle_plot.addItem(ema_line)
+            self.drawn_indicators['ema'] = ema_line
+    
+    def draw_bollinger_bands(self, x_data, closes, period, std_multiplier):
+        """Dibujar Bandas de Bollinger."""
+        if len(closes) < period:
+            return
+        
+        bb_middle = np.full_like(closes, np.nan)
+        bb_upper = np.full_like(closes, np.nan)
+        bb_lower = np.full_like(closes, np.nan)
+        
+        for i in range(period - 1, len(closes)):
+            window = closes[i - period + 1:i + 1]
+            middle = np.mean(window)
+            std = np.std(window)
+            
+            bb_middle[i] = middle
+            bb_upper[i] = middle + (std * std_multiplier)
+            bb_lower[i] = middle - (std * std_multiplier)
+        
+        valid_mask = ~np.isnan(bb_middle)
+        if np.any(valid_mask):
+            # Banda superior
+            upper_line = pg.PlotCurveItem(
+                x=x_data[valid_mask],
+                y=bb_upper[valid_mask],
+                pen=pg.mkPen(color='#00ffff', width=1.5, style=Qt.DashLine),
+                name='bb_upper'
+            )
+            self.candle_plot.addItem(upper_line)
+            self.drawn_indicators['bb_upper'] = upper_line
+            
+            # Banda media
+            middle_line = pg.PlotCurveItem(
+                x=x_data[valid_mask],
+                y=bb_middle[valid_mask],
+                pen=pg.mkPen(color='#ffffff', width=2),
+                name='bb_middle'
+            )
+            self.candle_plot.addItem(middle_line)
+            self.drawn_indicators['bb_middle'] = middle_line
+            
+            # Banda inferior
+            lower_line = pg.PlotCurveItem(
+                x=x_data[valid_mask],
+                y=bb_lower[valid_mask],
+                pen=pg.mkPen(color='#00ffff', width=1.5, style=Qt.DashLine),
+                name='bb_lower'
+            )
+            self.candle_plot.addItem(lower_line)
+            self.drawn_indicators['bb_lower'] = lower_line
+    
+    def draw_rsi(self, x_data, closes, period, overbought, oversold, color):
+        """Dibujar RSI en gráfico separado."""
+        if len(closes) < period + 1:
+            return
+        
+        # Calcular RSI
+        deltas = np.diff(closes)
+        gains = np.where(deltas > 0, deltas, 0)
+        losses = np.where(deltas < 0, -deltas, 0)
+        
+        avg_gain = np.zeros_like(closes)
+        avg_loss = np.zeros_like(closes)
+        rsi = np.full_like(closes, np.nan)
+        
+        avg_gain[period] = np.mean(gains[:period])
+        avg_loss[period] = np.mean(losses[:period])
+        
+        if avg_loss[period] == 0:
+            rsi[period] = 100
+        else:
+            rs = avg_gain[period] / avg_loss[period]
+            rsi[period] = 100 - (100 / (1 + rs))
+        
+        for i in range(period + 1, len(closes)):
+            avg_gain[i] = (avg_gain[i - 1] * (period - 1) + gains[i - 1]) / period
+            avg_loss[i] = (avg_loss[i - 1] * (period - 1) + losses[i - 1]) / period
+            
+            if avg_loss[i] == 0:
+                rsi[i] = 100
+            else:
+                rs = avg_gain[i] / avg_loss[i]
+                rsi[i] = 100 - (100 / (1 + rs))
+        
+        # Mostrar y dibujar RSI
+        self.rsi_plot.setVisible(True)
+        
+        # Agregar líneas horizontales con etiquetas
+        self.rsi_plot.add_hline(overbought, color='#ff6666', width=1, label=f"OB ({overbought})")
+        self.rsi_plot.add_hline(oversold, color='#66ff66', width=1, label=f"OS ({oversold})")
+        self.rsi_plot.add_hline(50, color='#666666', width=0.5, style=Qt.DashLine, label="50")
+        
+        # Dibujar línea RSI con etiqueta
+        self.rsi_plot.plot_indicator(x_data, rsi, color, f'RSI({period})', width=2)
+        
+        # Ajustar rango Y
+        self.rsi_plot.set_y_range(0, 100)
+    
+    def draw_macd_corrected(self, x_data, closes, fast_period, slow_period, signal_period):
+        """Dibujar MACD CORREGIDO - implementación correcta."""
+        min_required = max(fast_period, slow_period, signal_period)
+        if len(closes) < min_required:
+            return
+        
+        # Calcular EMA rápida
+        ema_fast = self.calculate_ema_corrected(closes, fast_period)
+        
+        # Calcular EMA lenta
+        ema_slow = self.calculate_ema_corrected(closes, slow_period)
+        
+        # Línea MACD = EMA rápida - EMA lenta
+        macd_line = np.full_like(closes, np.nan)
+        for i in range(len(closes)):
+            if not np.isnan(ema_fast[i]) and not np.isnan(ema_slow[i]):
+                macd_line[i] = ema_fast[i] - ema_slow[i]
+        
+        # Línea de señal = EMA de la línea MACD
+        signal_line = self.calculate_ema_corrected(macd_line, signal_period)
+        
+        # Histograma = MACD - Signal
+        histogram = np.full_like(closes, np.nan)
+        for i in range(len(closes)):
+            if not np.isnan(macd_line[i]) and not np.isnan(signal_line[i]):
+                histogram[i] = macd_line[i] - signal_line[i]
+        
+        # Mostrar y dibujar MACD
+        self.macd_plot.setVisible(True)
+        
+        # Agregar línea horizontal en 0
+        self.macd_plot.add_hline(0, color='#666666', width=0.5, style=Qt.DashLine, label="0")
+        
+        # Dibujar histograma PRIMERO (está en el fondo)
+        valid_hist = ~np.isnan(histogram)
+        if np.any(valid_hist):
+            self.macd_plot.plot_histogram(x_data[valid_hist], histogram[valid_hist])
+        
+        # Dibujar líneas MACD y Signal (encima del histograma)
+        valid_mask = ~np.isnan(macd_line) & ~np.isnan(signal_line)
+        if np.any(valid_mask):
+            # Línea MACD (azul)
+            self.macd_plot.plot_indicator(
+                x_data[valid_mask], 
+                macd_line[valid_mask], 
+                '#00aaff',  # Azul claro
+                f'MACD({fast_period},{slow_period})', 
+                width=2
+            )
+            
+            # Línea de señal (naranja)
+            self.macd_plot.plot_indicator(
+                x_data[valid_mask], 
+                signal_line[valid_mask], 
+                '#ffaa00',  # Naranja
+                f'Signal({signal_period})', 
+                width=2
+            )
+        
+        # Ajustar rango Y dinámicamente
+        if np.any(valid_mask):
+            # Calcular rangos
+            macd_vals = macd_line[valid_mask]
+            signal_vals = signal_line[valid_mask]
+            
+            if np.any(valid_hist):
+                hist_vals = histogram[valid_hist]
+                all_vals = np.concatenate([macd_vals, signal_vals, hist_vals])
+            else:
+                all_vals = np.concatenate([macd_vals, signal_vals])
+            
+            if len(all_vals) > 0:
+                min_val = np.min(all_vals)
+                max_val = np.max(all_vals)
+                
+                if min_val != max_val:
+                    margin = (max_val - min_val) * 0.1
+                    self.macd_plot.set_y_range(min_val - margin, max_val + margin)
+    
+    def calculate_ema_corrected(self, data, period):
+        """Calcular EMA de manera robusta."""
+        if len(data) < period:
+            return np.full_like(data, np.nan)
+        
+        ema = np.full_like(data, np.nan)
+        
+        # Calcular SMA inicial
+        sma = np.nanmean(data[:period])
+        if not np.isnan(sma):
+            ema[period - 1] = sma
+        
+        # Multiplicador
+        multiplier = 2.0 / (period + 1.0)
+        
+        # Calcular EMA para valores posteriores
+        for i in range(period, len(data)):
+            if not np.isnan(ema[i - 1]) and not np.isnan(data[i]):
+                ema[i] = (data[i] * multiplier) + (ema[i - 1] * (1 - multiplier))
+            elif np.isnan(ema[i - 1]) and not np.isnan(data[i]):
+                # Si el EMA anterior es NaN pero el dato actual es válido,
+                # usar el dato actual como EMA
+                ema[i] = data[i]
+        
+        return ema
+    
+    def draw_stochastic_with_labels(self, x_data, highs, lows, closes, k_period, d_period, slowing):
+        """Dibujar Oscilador Estocástico CON IDENTIFICADORES."""
+        min_required = k_period + max(d_period, slowing)
+        if len(closes) < min_required:
+            return
+        
+        # Calcular %K
+        k_line = np.full_like(closes, np.nan)
+        for i in range(k_period - 1, len(closes)):
+            high_window = highs[i - k_period + 1:i + 1]
+            low_window = lows[i - k_period + 1:i + 1]
+            current_close = closes[i]
+            
+            highest_high = np.max(high_window)
+            lowest_low = np.min(low_window)
+            
+            if highest_high != lowest_low:
+                k_line[i] = ((current_close - lowest_low) / (highest_high - lowest_low)) * 100
+        
+        # Suavizar %K si slowing > 1
+        if slowing > 1:
+            k_line_smoothed = np.full_like(k_line, np.nan)
+            for i in range(k_period + slowing - 2, len(k_line)):
+                window = k_line[i - slowing + 1:i + 1]
+                if np.any(~np.isnan(window)):
+                    k_line_smoothed[i] = np.nanmean(window)
+            k_line = k_line_smoothed
+        
+        # Calcular %D (media móvil de %K)
+        d_line = np.full_like(closes, np.nan)
+        for i in range(k_period + d_period - 2, len(k_line)):
+            window = k_line[i - d_period + 1:i + 1]
+            if np.any(~np.isnan(window)):
+                d_line[i] = np.nanmean(window)
+        
+        # Mostrar y dibujar Stochastic
+        self.stoch_plot.setVisible(True)
+        
+        # Agregar líneas horizontales con etiquetas claras
+        self.stoch_plot.add_hline(80, color='#ff6666', width=1, label="Overbought (80)")
+        self.stoch_plot.add_hline(20, color='#66ff66', width=1, label="Oversold (20)")
+        self.stoch_plot.add_hline(50, color='#666666', width=0.5, style=Qt.DashLine, label="Mid (50)")
+        
+        # Dibujar líneas %K y %D con identificadores
+        valid_mask = ~np.isnan(k_line) & ~np.isnan(d_line)
+        if np.any(valid_mask):
+            # %K (línea continua cian)
+            self.stoch_plot.plot_indicator(
+                x_data[valid_mask], 
+                k_line[valid_mask], 
+                '#00ffff',  # Cian brillante
+                f'%K({k_period},{slowing})', 
+                width=2,
+                style=Qt.SolidLine
+            )
+            
+            # %D (línea discontinua amarilla)
+            self.stoch_plot.plot_indicator(
+                x_data[valid_mask], 
+                d_line[valid_mask], 
+                '#ffff00',  # Amarillo brillante
+                f'%D({d_period})', 
+                width=2,
+                style=Qt.DashLine
+            )
+        
+        # Ajustar rango Y
+        self.stoch_plot.set_y_range(0, 100)
+    
+    def update_chart(self, data, indicator_configs=None):
         """Actualizar el gráfico con nuevos datos."""
-        if not candles:
+        if not data:
             self.status_label.setText("Sin datos disponibles")
             return
         
-        self.candles_data = candles
+        self.candles_data = data
         
-        # Guardar información del símbolo
-        if symbol_info:
-            self.symbol_info = symbol_info
-            self.update_symbol_info_display()
-        
-        # Guardar hora del servidor
-        if server_time:
-            self.server_time = server_time
-            self.update_server_time_display()
+        if indicator_configs is not None:
+            self.indicators_config = indicator_configs
         
         # Limpiar gráfico anterior
-        self.main_plot.clear()
+        self.candle_plot.clear()
         
-        # Preparar datos (ahora sin gaps)
-        times, opens, highs, lows, closes, volumes = self.prepare_candle_data(candles)
+        # Preparar datos
+        times, opens, highs, lows, closes, volumes = self.prepare_candle_data(data)
         
         # Dibujar velas
         self.draw_candles(times, opens, highs, lows, closes)
         
-        # Actualizar información de precios
-        if real_time_data:
-            self.update_price_display(real_time_data)
-        
-        # Configurar escala del eje Y
+        # Configurar escala
         self.configure_price_axis()
         
         # Auto-ajustar zoom
         self.auto_scale_chart()
         
+        # Aplicar indicadores si están activados
+        if self.btn_toggle_indicators.isChecked() and self.indicators_config:
+            self.apply_indicators_to_chart()
+        
         # Actualizar estado
-        if candles:
-            last_candle = candles[-1]
+        if data:
+            last_candle = data[-1]
             if hasattr(last_candle, 'timestamp'):
                 last_time = last_candle.timestamp
             elif hasattr(last_candle, 'time'):
@@ -738,8 +1364,7 @@ class ChartView(QWidget):
             
             self.status_label.setText(
                 f"{self.current_symbol} {self.current_timeframe} | "
-                f"Velas: {len(candles)} | "
-                f"Etiquetas: {len(self.date_axis.tick_labels) if hasattr(self.date_axis, 'tick_labels') else 0} | "
+                f"Velas: {len(data)} | "
                 f"Última: {last_time.strftime('%Y/%m/%d %H:%M:%S')}"
             )
     
@@ -754,7 +1379,6 @@ class ChartView(QWidget):
         
         self.lbl_symbol_info.setText(f"Dígitos: {digits} | Punto: {point:.6f} | Spread: {spread}")
         
-        # Mostrar escala del precio
         if digits == 5:
             price_scale = "0.00001"
             min_move = "0.1 pip"
@@ -780,7 +1404,7 @@ class ChartView(QWidget):
             return
         
         digits = self.symbol_info.get('digits', 5)
-        left_axis = self.main_plot.getAxis('left')
+        left_axis = self.candle_plot.getAxis('left')
         
         if digits == 5:
             left_axis.setLabel('Precio (0.00001)')

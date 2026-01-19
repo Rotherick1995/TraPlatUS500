@@ -3,7 +3,7 @@ import sys
 import os
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QComboBox, QTextEdit, QTabWidget,
-                             QSplitter, QGroupBox, QGridLayout, QMessageBox,QFrame)
+                             QSplitter, QGroupBox, QGridLayout, QMessageBox, QFrame)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QPalette
 import pyqtgraph as pg
@@ -90,6 +90,10 @@ class MainWindow(QMainWindow):
         # Conectar señales del chart view
         self.chart_view.symbol_changed.connect(self.on_symbol_changed)
         self.chart_view.timeframe_changed.connect(self.on_timeframe_changed)
+        
+        # Conectar señales de indicadores del control panel al chart view
+        if hasattr(self.control_panel, 'indicator_settings_changed'):
+            self.control_panel.indicator_settings_changed.connect(self.on_indicator_settings_changed)
         
         # Configurar tamaños relativos
         splitter.setSizes([1000, 400])
@@ -318,6 +322,11 @@ class MainWindow(QMainWindow):
                 # Sincronizar controles con los paneles
                 self.sync_ui_with_panels()
                 
+                # Obtener configuraciones de indicadores del control panel
+                if hasattr(self.control_panel, 'get_indicator_configurations'):
+                    indicator_configs = self.control_panel.get_indicator_configurations()
+                    self.chart_view.update_indicator_settings(indicator_configs)
+                
                 # Iniciar actualización de precios
                 self.timer_prices.start()
                 self.refresh_data()
@@ -454,12 +463,15 @@ class MainWindow(QMainWindow):
                     if not server_time:
                         server_time = real_time_result.get('server_time')
                 
-                # Actualizar gráfico con TODA la información
+                # Obtener configuraciones de indicadores
+                indicator_configs = {}
+                if hasattr(self.control_panel, 'get_indicator_configurations'):
+                    indicator_configs = self.control_panel.get_indicator_configurations()
+                
+                # Actualizar gráfico con la información - CORREGIDO: solo 2 parámetros
                 self.chart_view.update_chart(
                     data, 
-                    real_time_data,
-                    symbol_info,
-                    server_time
+                    indicator_configs  # Pasar configuraciones de indicadores
                 )
                 
                 # Actualizar precios en el panel de control
@@ -484,18 +496,12 @@ class MainWindow(QMainWindow):
             
             if result['success']:
                 data = result['data']
-                symbol_info = result.get('symbol_info')
-                server_time = result.get('server_time')
                 
                 # Actualizar precios en el gráfico
                 self.chart_view.update_price_display(data)
                 
                 # Actualizar precios en el panel de control
                 self.control_panel.update_price_display(data)
-                
-                # Actualizar hora del servidor en el gráfico
-                if server_time:
-                    self.chart_view.server_time = server_time
                 
         except Exception as e:
             self.log_message(f"❌ Error actualizando precios: {str(e)}")
@@ -551,6 +557,21 @@ class MainWindow(QMainWindow):
         
         if self.is_connected:
             self.refresh_data()
+    
+    def on_indicator_settings_changed(self, indicator_name, settings):
+        """Manejador para cambio de configuración de indicador."""
+        self.log_message(f"⚙️ Configuración de {indicator_name} actualizada")
+        
+        # Obtener configuraciones actualizadas
+        if hasattr(self.control_panel, 'get_indicator_configurations'):
+            indicator_configs = self.control_panel.get_indicator_configurations()
+            
+            # Actualizar chart view
+            self.chart_view.update_indicator_settings(indicator_configs)
+            
+            # Refrescar datos si está conectado
+            if self.is_connected:
+                self.refresh_data()
     
     def sync_ui_with_panels(self):
         """Sincronizar la UI superior con los paneles."""
