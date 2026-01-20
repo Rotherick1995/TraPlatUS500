@@ -8,7 +8,8 @@ from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QPalette
 import pyqtgraph as pg
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
+import MetaTrader5 as mt5
 
 # Importaciones de tu proyecto
 from src.application.use_cases.connect_to_mt5 import create_connect_to_mt5_use_case
@@ -33,6 +34,8 @@ class MainWindow(QMainWindow):
         self.current_symbol = settings.DEFAULT_SYMBOL
         self.current_timeframe = "H1"
         self.server_name = "No conectado"
+        self.server_time = None  # Hora del servidor MT5
+        self.server_timezone = "UTC"  # Zona horaria del servidor
         
         # Configurar UI
         self.setup_ui()
@@ -59,7 +62,7 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(10, 10, 10, 10)
         main_layout.setSpacing(5)
         
-        # 1. Cabecera con título y estado de conexión
+        # 1. Cabecera con título y hora del servidor
         header_layout = self.create_header()
         main_layout.addLayout(header_layout)
         
@@ -122,7 +125,7 @@ class MainWindow(QMainWindow):
         self.setup_status_bar()
     
     def create_header(self):
-        """Crear cabecera con título grande."""
+        """Crear cabecera con título grande y hora del servidor."""
         header_layout = QVBoxLayout()
         header_layout.setSpacing(5)
         
@@ -135,6 +138,29 @@ class MainWindow(QMainWindow):
         title_label.setStyleSheet("color: #ffffff; padding: 5px;")
         title_label.setAlignment(Qt.AlignCenter)
         
+        # Hora del servidor (centrada, debajo del título)
+        server_time_layout = QHBoxLayout()
+        server_time_layout.addStretch()
+        
+        # Etiqueta para la hora del servidor - Formato completo
+        self.lbl_server_time = QLabel("🕒 Hora servidor: --/--/---- --:--:-- (UTC)")
+        self.lbl_server_time.setStyleSheet("""
+            QLabel {
+                color: #00ffff;
+                font-size: 14px;
+                font-weight: bold;
+                padding: 5px 15px;
+                background-color: rgba(0, 60, 80, 0.4);
+                border-radius: 8px;
+                border: 1px solid #008888;
+            }
+        """)
+        self.lbl_server_time.setAlignment(Qt.AlignCenter)
+        self.lbl_server_time.setMinimumWidth(350)
+        
+        server_time_layout.addWidget(self.lbl_server_time)
+        server_time_layout.addStretch()
+        
         # Línea separadora
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
@@ -143,6 +169,7 @@ class MainWindow(QMainWindow):
         separator.setMaximumHeight(2)
         
         header_layout.addWidget(title_label)
+        header_layout.addLayout(server_time_layout)
         header_layout.addWidget(separator)
         
         return header_layout
@@ -259,28 +286,66 @@ class MainWindow(QMainWindow):
         self.lbl_status_data = QLabel("Datos: Esperando conexión")
         self.lbl_status_data.setStyleSheet("color: #aaa;")
         
-        self.lbl_status_time = QLabel("--:--:--")
-        self.lbl_status_time.setStyleSheet("color: #0af; font-weight: bold;")
+        # Hora local en barra de estado
+        self.lbl_local_time = QLabel("Local: --:--:--")
+        self.lbl_local_time.setStyleSheet("color: #0af; font-weight: bold;")
         
         self.statusBar().addPermanentWidget(self.lbl_status_data)
-        self.statusBar().addPermanentWidget(self.lbl_status_time)
+        self.statusBar().addPermanentWidget(self.lbl_local_time)
     
     def setup_timers(self):
         """Configurar timers para actualizaciones periódicas."""
-        # Timer para actualizar hora
-        self.timer_clock = QTimer()
-        self.timer_clock.timeout.connect(self.update_clock)
-        self.timer_clock.start(1000)
+        # Timer para actualizar hora local
+        self.timer_local_clock = QTimer()
+        self.timer_local_clock.timeout.connect(self.update_local_clock)
+        self.timer_local_clock.start(1000)
+        
+        # Timer para actualizar hora del servidor
+        self.timer_server_clock = QTimer()
+        self.timer_server_clock.timeout.connect(self.update_server_clock_display)
+        self.timer_server_clock.setInterval(1000)  # 1 segundo
         
         # Timer para actualizar precios (si está conectado)
         self.timer_prices = QTimer()
         self.timer_prices.timeout.connect(self.update_prices)
         self.timer_prices.setInterval(2000)  # 2 segundos
+        
+        # Timer para sincronizar hora del servidor periódicamente
+        self.timer_sync_server_time = QTimer()
+        self.timer_sync_server_time.timeout.connect(self.sync_server_time)
+        self.timer_sync_server_time.setInterval(30000)  # 30 segundos
     
-    def update_clock(self):
-        """Actualizar reloj en la barra de estado."""
+    def update_local_clock(self):
+        """Actualizar reloj local."""
         current_time = datetime.now().strftime("%H:%M:%S")
-        self.lbl_status_time.setText(current_time)
+        self.lbl_local_time.setText(f"Local: {current_time}")
+    
+    def update_server_clock_display(self):
+        """Actualizar display de hora del servidor."""
+        if self.is_connected and self.server_time:
+            try:
+                # Incrementar 1 segundo
+                self.server_time = self.server_time + timedelta(seconds=1)
+                
+                # Formatear fecha y hora completa
+                date_str = self.server_time.strftime("%d/%m/%Y")
+                time_str = self.server_time.strftime("%H:%M:%S")
+                
+                # Mostrar con zona horaria
+                self.lbl_server_time.setText(f"🕒 Hora servidor: {date_str} {time_str} ({self.server_timezone})")
+                
+            except Exception as e:
+                self.log_message(f"⚠️ Error actualizando hora servidor: {str(e)}")
+                # Si hay error, mostrar hora local
+                local_time = datetime.now()
+                self.lbl_server_time.setText(f"🕒 Hora local: {local_time.strftime('%d/%m/%Y %H:%M:%S')}")
+        elif not self.is_connected:
+            self.lbl_server_time.setText("🕒 Hora servidor: --/--/---- --:--:-- (UTC)")
+    
+    def sync_server_time(self):
+        """Sincronizar hora del servidor desde MT5."""
+        if self.is_connected:
+            self.fetch_server_time_from_mt5()
     
     # ===== MÉTODOS DE CONEXIÓN =====
     
@@ -316,6 +381,9 @@ class MainWindow(QMainWindow):
                 # Crear caso de uso de datos
                 self.data_use_case = create_fetch_market_data_use_case(self.mt5_use_case)
                 
+                # OBTENER HORA DEL SERVIDOR DESDE METATRADER 5
+                self.fetch_server_time_from_mt5()
+                
                 # Actualizar información de cuenta y servidor
                 self.update_account_info(result['data'])
                 
@@ -327,7 +395,9 @@ class MainWindow(QMainWindow):
                     indicator_configs = self.control_panel.get_indicator_configurations()
                     self.chart_view.update_indicator_settings(indicator_configs)
                 
-                # Iniciar actualización de precios
+                # Iniciar timers
+                self.timer_server_clock.start()
+                self.timer_sync_server_time.start()
                 self.timer_prices.start()
                 self.refresh_data()
                 
@@ -348,14 +418,88 @@ class MainWindow(QMainWindow):
             self.btn_connect.setEnabled(True)
             self.btn_connect.setText("🔌 Conectar a MT5")
     
+    def fetch_server_time_from_mt5(self):
+        """Obtener hora del servidor directamente desde MetaTrader 5."""
+        if not self.is_connected:
+            return
+        
+        try:
+            # Usar la API de MetaTrader5 directamente para obtener la hora del servidor
+            server_time_dt = mt5.time_trade_server()
+            
+            if server_time_dt:
+                # Convertir a datetime
+                self.server_time = datetime.fromtimestamp(server_time_dt)
+                
+                # Determinar zona horaria basada en el servidor
+                self.determine_server_timezone()
+                
+                # Formatear para mostrar
+                date_str = self.server_time.strftime("%d/%m/%Y")
+                time_str = self.server_time.strftime("%H:%M:%S")
+                
+                # Actualizar display inmediatamente
+                self.lbl_server_time.setText(f"🕒 Hora servidor: {date_str} {time_str} ({self.server_timezone})")
+                
+                self.log_message(f"🕒 Hora servidor MT5: {date_str} {time_str} ({self.server_timezone})")
+            else:
+                self.log_message("⚠️ No se pudo obtener hora del servidor desde MT5")
+                # Fallback: usar hora local
+                self.server_time = datetime.now()
+                self.server_timezone = "LOCAL"
+                self.lbl_server_time.setText(f"🕒 Hora local: {self.server_time.strftime('%d/%m/%Y %H:%M:%S')}")
+                
+        except Exception as e:
+            self.log_message(f"⚠️ Error obteniendo hora servidor MT5: {str(e)}")
+            # Fallback a hora local
+            self.server_time = datetime.now()
+            self.server_timezone = "LOCAL"
+            self.lbl_server_time.setText(f"🕒 Hora local: {self.server_time.strftime('%d/%m/%Y %H:%M:%S')}")
+    
+    def determine_server_timezone(self):
+        """Determinar zona horaria del servidor basado en su nombre."""
+        if not self.server_name:
+            self.server_timezone = "UTC"
+            return
+        
+        server_lower = self.server_name.lower()
+        
+        # Detectar zonas horarias comunes por nombre de servidor
+        if any(x in server_lower for x in ['london', 'uk', 'gb', 'fca', 'fca-regulated']):
+            self.server_timezone = "GMT"
+        elif any(x in server_lower for x in ['new york', 'ny', 'us', 'nfa', 'america']):
+            self.server_timezone = "EST"
+        elif any(x in server_lower for x in ['chicago', 'cme']):
+            self.server_timezone = "CST"
+        elif any(x in server_lower for x in ['sydney', 'australia', 'asic']):
+            self.server_timezone = "AEST"
+        elif any(x in server_lower for x in ['tokyo', 'japan']):
+            self.server_timezone = "JST"
+        elif any(x in server_lower for x in ['hong kong', 'singapore', 'asia']):
+            self.server_timezone = "HKT/SGT"
+        elif any(x in server_lower for x in ['cyprus', 'cysec']):
+            self.server_timezone = "EET"
+        elif any(x in server_lower for x in ['demo', 'test', 'practice']):
+            # Para servidores demo, usualmente UTC
+            self.server_timezone = "UTC"
+        else:
+            # Por defecto UTC
+            self.server_timezone = "UTC"
+    
     def disconnect_from_mt5(self):
         """Desconectar de MT5."""
         if self.mt5_use_case:
             self.mt5_use_case.disconnect()
             self.is_connected = False
             self.server_name = "No conectado"
+            self.server_time = None
+            self.server_timezone = "UTC"
             self.update_connection_status(False, "❌ Desconectado")
+            
+            # Detener todos los timers
             self.timer_prices.stop()
+            self.timer_server_clock.stop()
+            self.timer_sync_server_time.stop()
             
             # Actualizar información del servidor
             self.lbl_server_name.setText("No conectado")
@@ -364,6 +508,9 @@ class MainWindow(QMainWindow):
             # Actualizar información de cuenta
             self.lbl_account_info.setText("--")
             self.lbl_account_info.setStyleSheet("font-weight: bold; color: #aaa; font-size: 12px;")
+            
+            # Resetear hora del servidor
+            self.lbl_server_time.setText("🕒 Hora servidor: --/--/---- --:--:-- (UTC)")
             
             # Actualizar paneles
             self.control_panel.update_connection_status(False)
@@ -448,7 +595,6 @@ class MainWindow(QMainWindow):
             if result['success']:
                 data = result['data']
                 symbol_info = result.get('symbol_info')
-                server_time = result.get('server_time')
                 
                 self.log_message(f"📊 Datos obtenidos: {len(data)} velas")
                 
@@ -457,18 +603,15 @@ class MainWindow(QMainWindow):
                 real_time_data = None
                 if real_time_result['success']:
                     real_time_data = real_time_result['data']
-                    # Usar la misma información del símbolo y hora del servidor
                     if not symbol_info:
                         symbol_info = real_time_result.get('symbol_info')
-                    if not server_time:
-                        server_time = real_time_result.get('server_time')
                 
                 # Obtener configuraciones de indicadores
                 indicator_configs = {}
                 if hasattr(self.control_panel, 'get_indicator_configurations'):
                     indicator_configs = self.control_panel.get_indicator_configurations()
                 
-                # Actualizar gráfico con la información - CORREGIDO: solo 2 parámetros
+                # Actualizar gráfico con la información
                 self.chart_view.update_chart(
                     data, 
                     indicator_configs  # Pasar configuraciones de indicadores
