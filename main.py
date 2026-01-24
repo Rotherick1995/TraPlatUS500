@@ -56,6 +56,9 @@ class TradingApp:
         self.current_symbol = settings.DEFAULT_SYMBOL
         self.current_timeframe = TimeFrame.H1
         
+        # NUEVO: Configuración de cantidad de velas
+        self.current_candles_count = 100  # Valor por defecto
+        
         # Configuración de indicadores
         self.indicators_config = {
             'sma': {'enabled': True, 'color': '#ffff00', 'period': 20, 'line_width': 2},
@@ -142,11 +145,11 @@ class TradingApp:
             if hasattr(self.main_window, 'cmb_timeframe'):
                 self.main_window.cmb_timeframe.currentTextChanged.connect(self.on_timeframe_changed)
             
-            # Botón de aplicar indicadores (si existe en la ventana)
+            # Botón de aplicar indicadores
             if hasattr(self.main_window, 'btn_apply_indicators'):
                 self.main_window.btn_apply_indicators.clicked.connect(self.apply_indicators_to_chart)
             
-            # Señal de indicadores actualizados desde control panel
+            # Señal de indicadores actualizados
             if hasattr(self.main_window, 'indicators_updated'):
                 self.main_window.indicators_updated.connect(self.on_indicators_updated)
             
@@ -176,10 +179,15 @@ class TradingApp:
             if hasattr(control_panel, 'sell_requested'):
                 control_panel.sell_requested.connect(self.on_trading_signal)
             
-            # Señal de indicadores (MÁS IMPORTANTE)
+            # Señal de indicadores
             if hasattr(control_panel, 'indicators_updated'):
                 control_panel.indicators_updated.connect(self.on_indicators_updated_from_control)
                 self.log_message("✅ Señal de indicadores del ControlPanel conectada")
+            
+            # NUEVO: Señal de cantidad de velas
+            if hasattr(control_panel, 'candles_count_changed'):
+                control_panel.candles_count_changed.connect(self.on_candles_count_changed)
+                self.log_message("✅ Señal de cantidad de velas conectada")
             
             self.log_message("✅ Señales del ControlPanel conectadas")
             
@@ -189,13 +197,13 @@ class TradingApp:
     def load_demo_data(self):
         """Cargar datos demo para mostrar indicadores."""
         try:
-            # Crear datos demo
-            demo_candles = self.create_demo_candles()
+            # Crear datos demo con cantidad configurable
+            demo_candles = self.create_demo_candles(count=self.current_candles_count)
             
             # Aplicar indicadores a datos demo
             self.apply_indicators_to_demo_data(demo_candles)
             
-            self.log_message("📊 Datos demo cargados con indicadores")
+            self.log_message(f"📊 {self.current_candles_count} velas demo cargadas con indicadores")
             
         except Exception as e:
             self.log_message(f"⚠️ Error cargando datos demo: {str(e)}")
@@ -241,6 +249,10 @@ class TradingApp:
                 # Actualizar gráfico con datos demo
                 self.main_window.chart_view.update_chart(candles, self.indicators_config)
                 
+                # Actualizar contador de velas
+                if hasattr(self.main_window, 'lbl_data_count'):
+                    self.main_window.lbl_data_count.setText(f"Velas: {len(candles)}")
+                
                 # Activar visualización de indicadores
                 if hasattr(self.main_window.chart_view, 'btn_toggle_indicators'):
                     self.main_window.chart_view.btn_toggle_indicators.setChecked(True)
@@ -263,7 +275,7 @@ class TradingApp:
                     self.refresh_market_data()
                 else:
                     # Usar datos demo
-                    demo_candles = self.create_demo_candles()
+                    demo_candles = self.create_demo_candles(self.current_candles_count)
                     self.main_window.chart_view.update_chart(demo_candles, self.indicators_config)
                 
                 # Activar visualización
@@ -312,6 +324,27 @@ class TradingApp:
             
         except Exception as e:
             self.log_message(f"❌ Error en on_indicators_updated_from_control: {str(e)}")
+    
+    def on_candles_count_changed(self, count):
+        """Manejador para cambio de cantidad de velas."""
+        try:
+            self.current_candles_count = count
+            self.log_message(f"📊 Cantidad de velas cambiada a: {count}")
+            
+            # Actualizar UI si es posible
+            if hasattr(self.main_window, 'lbl_candles_count'):
+                self.main_window.lbl_candles_count.setText(f"{count}")
+            
+            # Refrescar datos
+            if self.is_connected:
+                self.refresh_market_data()
+            else:
+                # Actualizar datos demo
+                demo_candles = self.create_demo_candles(count)
+                self.apply_indicators_to_demo_data(demo_candles)
+                
+        except Exception as e:
+            self.log_message(f"❌ Error en on_candles_count_changed: {str(e)}")
     
     def on_symbol_changed(self, symbol):
         """Manejador para cambio de símbolo."""
@@ -401,7 +434,7 @@ class TradingApp:
                 
                 login = account_info.get('login', 'N/A') if isinstance(account_info, dict) else getattr(account_info, 'login', 'N/A')
                 self.log_message(f"✅ Conectado a MT5 - Cuenta: {login}")
-                self.log_message("📈 Aplicando indicadores a datos reales...")
+                self.log_message(f"📈 Aplicando {self.current_candles_count} velas con indicadores...")
                 
             else:
                 self.update_connection_status(False, f"❌ {message[:30]}")
@@ -541,10 +574,14 @@ class TradingApp:
             return
         
         try:
+            # Usar cantidad configurable de velas
+            count = self.current_candles_count
+            self.log_message(f"📊 Solicitando {count} velas de datos...")
+            
             result = self.data_use_case.get_historical_data(
                 symbol=self.current_symbol,
                 timeframe=self.current_timeframe.value,
-                count=100
+                count=count
             )
             
             # Verificar si es diccionario o objeto
@@ -558,12 +595,16 @@ class TradingApp:
                 message = getattr(result, 'message', '')
             
             if success and data:
-                self.log_message(f"📊 Datos actualizados: {len(data)} velas")
+                self.log_message(f"📊 {len(data)} velas actualizadas")
                 
                 # Actualizar gráfico CON indicadores
                 if hasattr(self.main_window, 'chart_view'):
                     self.main_window.chart_view.update_chart(data, self.indicators_config)
                     
+                # Actualizar contador de velas en UI
+                if hasattr(self.main_window, 'lbl_data_count'):
+                    self.main_window.lbl_data_count.setText(f"Velas: {len(data)}")
+                
             else:
                 self.log_message(f"⚠️ No se pudieron obtener datos: {message}")
                 

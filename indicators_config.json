@@ -28,11 +28,11 @@
     "params": {
       "period": 14,
       "overbought": 80,
-      "oversold": 17,
+      "oversold": 20,
       "params": {
         "period": 14,
         "overbought": 80,
-        "oversold": 17
+        "oversold": 20
       }
     }
   },
@@ -42,14 +42,14 @@
     "line_width": 2.0,
     "params": {
       "fast_period": 12,
-      "slow_period": 26,
+      "slow_period": 25,
       "signal_period": 9,
       "signal_color": "#ff0000",
       "histogram_positive_color": "#00aa00",
       "histogram_negative_color": "#aa0000",
       "params": {
         "fast_period": 12,
-        "slow_period": 26,
+        "slow_period": 25,
         "signal_period": 9,
         "signal_color": "#ff0000",
         "histogram_positive_color": "#00aa00",

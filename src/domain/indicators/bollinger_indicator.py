@@ -7,7 +7,7 @@ from .base_indicator import BaseIndicator, IndicatorType, IndicatorResult, Indic
 class BollingerIndicator(BaseIndicator):
     """Indicador de Bandas de Bollinger."""
     
-    def __init__(self, period: int = 20, std_multiplier: float = 2.0):
+    def __init__(self, period: int = 40, std_multiplier: float = 3.0):
         super().__init__(name=f"BB({period},{std_multiplier})", type=IndicatorType.OVERLAY)
         self.period = period
         self.std_multiplier = std_multiplier

@@ -58,6 +58,8 @@ TIMEFRAMES = {
 # Configuración de datos
 DEFAULT_TIMEFRAME = "1H"
 DEFAULT_DATA_COUNT = 100
+MAX_DATA_COUNT = 10000  # NUEVO: Máximo de velas que se pueden cargar
+MIN_DATA_COUNT = 10     # NUEVO: Mínimo de velas que se pueden cargar
 
 # ============================================================================
 # CONFIGURACIÓN DE TRADING
@@ -85,7 +87,7 @@ LOG_LEVEL = "INFO"  # DEBUG, INFO, WARNING, ERROR, CRITICAL
 
 # Formato del log
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+LOG_DATE_FORMAT = "%Y-%m-d %H:%M:%S"
 
 # ============================================================================
 # CONFIGURACIÓN DE LA APLICACIÓN
@@ -109,4 +111,6 @@ UI_COLORS = {
     "danger": "#F44336",
     "warning": "#FF9800",
     "info": "#2196F3",
+    "bullish": "#4CAF50",  # NUEVO: Color para velas alcistas
+    "bearish": "#F44336",  # NUEVO: Color para velas bajistas
 }

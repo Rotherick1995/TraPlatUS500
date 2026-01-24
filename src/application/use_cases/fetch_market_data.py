@@ -310,7 +310,7 @@ class FetchMarketDataUseCase:
         """Obtiene la hora del servidor de manera eficiente."""
         try:
             # Intentar obtener hora del servidor usando MT5 directamente
-            server_time = mt5.symbol_info_tick("EURUSD").time_msc if mt5.symbol_info_tick("EURUSD") else None
+            server_time = mt5.symbol_info_tick("US500").time_msc if mt5.symbol_info_tick("US500") else None
             
             if server_time:
                 # Convertir timestamp a datetime

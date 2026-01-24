@@ -1,12 +1,10 @@
 # src/presentation/main_window.py
 import sys
-import os
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                             QPushButton, QLabel, QComboBox, QTextEdit, QTabWidget,
+                             QPushButton, QLabel, QComboBox, QTabWidget,
                              QSplitter, QGroupBox, QGridLayout, QMessageBox, QFrame)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QPalette
-import pyqtgraph as pg
 import numpy as np
 from datetime import datetime, timedelta
 import MetaTrader5 as mt5
@@ -37,6 +35,9 @@ class MainWindow(QMainWindow):
         self.server_time = None  # Hora del servidor MT5
         self.server_timezone = "UTC"  # Zona horaria del servidor
         
+        # NUEVO: Configuración de cantidad de velas
+        self.current_candles_count = 100  # Valor por defecto
+        
         # Configurar UI
         self.setup_ui()
         self.setup_timers()
@@ -48,7 +49,9 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         """Configurar la interfaz de usuario."""
         self.setWindowTitle("Rotherick's Trading Platform")
-        self.setGeometry(100, 100, 1400, 800)
+        
+        # Iniciar en pantalla completa
+        self.showMaximized()
         
         # Tema oscuro
         self.set_dark_theme()
@@ -73,13 +76,25 @@ class MainWindow(QMainWindow):
         # 3. Área principal dividida
         splitter = QSplitter(Qt.Horizontal)
         
-        # Panel izquierdo (gráfico) - Usar ChartView personalizado
-        self.chart_view = ChartView()
-        splitter.addWidget(self.chart_view)
-        
-        # Panel derecho (control) - Usar ControlPanel personalizado
+        # Control panel
         self.control_panel = ControlPanel()
-        splitter.addWidget(self.control_panel)
+        self.control_panel.setMinimumWidth(400)
+        self.control_panel.setMaximumWidth(600)
+        
+        # Chart view
+        self.chart_view = ChartView()
+        self.chart_view.setMinimumWidth(800)
+        
+        # Agregar widgets en orden de visualización
+        splitter.addWidget(self.chart_view)      # Izquierda: Chart
+        splitter.addWidget(self.control_panel)   # Derecha: Control panel
+        
+        # Configurar proporciones iniciales (70% chart, 30% panel)
+        splitter.setSizes([700, 300])
+        
+        # Establecer stretch factors
+        splitter.setStretchFactor(0, 3)  # Chart tiene stretch factor 3
+        splitter.setStretchFactor(1, 1)  # Panel tiene stretch factor 1
         
         # Conectar señales del control panel
         self.control_panel.connect_requested.connect(self.connect_to_mt5)
@@ -90,38 +105,20 @@ class MainWindow(QMainWindow):
         self.control_panel.sell_requested.connect(self.on_sell_requested)
         self.control_panel.refresh_positions.connect(self.refresh_positions)
         
+        # Conectar NUEVA señal para cantidad de velas
+        self.control_panel.candles_count_changed.connect(self.on_candles_count_changed)
+        
         # Conectar señales del chart view
         self.chart_view.symbol_changed.connect(self.on_symbol_changed)
         self.chart_view.timeframe_changed.connect(self.on_timeframe_changed)
         
-        # Conectar señales de indicadores del control panel al chart view
-        if hasattr(self.control_panel, 'indicator_settings_changed'):
-            self.control_panel.indicator_settings_changed.connect(self.on_indicator_settings_changed)
+        # Conectar señales de indicadores
+        if hasattr(self.control_panel, 'indicators_updated'):
+            self.control_panel.indicators_updated.connect(self.chart_view.update_indicator_settings)
         
-        # Configurar tamaños relativos
-        splitter.setSizes([1000, 400])
+        main_layout.addWidget(splitter, 1)
         
-        main_layout.addWidget(splitter)
-        
-        # 4. Barra inferior (logs)
-        self.txt_mini_log = QTextEdit()
-        self.txt_mini_log.setMaximumHeight(100)
-        self.txt_mini_log.setReadOnly(True)
-        self.txt_mini_log.setStyleSheet("""
-            QTextEdit {
-                background-color: #1a1a1a;
-                color: #ccc;
-                font-family: monospace;
-                font-size: 10px;
-                border: 1px solid #333;
-                border-radius: 4px;
-            }
-        """)
-        self.txt_mini_log.setPlaceholderText("Logs de la aplicación...")
-        
-        main_layout.addWidget(self.txt_mini_log)
-        
-        # 5. Barra de estado
+        # 4. Barra de estado
         self.setup_status_bar()
     
     def create_header(self):
@@ -138,11 +135,10 @@ class MainWindow(QMainWindow):
         title_label.setStyleSheet("color: #ffffff; padding: 5px;")
         title_label.setAlignment(Qt.AlignCenter)
         
-        # Hora del servidor (centrada, debajo del título)
+        # Hora del servidor
         server_time_layout = QHBoxLayout()
         server_time_layout.addStretch()
         
-        # Etiqueta para la hora del servidor - Formato completo
         self.lbl_server_time = QLabel("🕒 Hora servidor: --/--/---- --:--:-- (UTC)")
         self.lbl_server_time.setStyleSheet("""
             QLabel {
@@ -249,7 +245,21 @@ class MainWindow(QMainWindow):
         account_layout.addWidget(self.lbl_account_label)
         account_layout.addWidget(self.lbl_account_info)
         
-        # Separador
+        # Información de velas
+        candles_group = QWidget()
+        candles_layout = QVBoxLayout(candles_group)
+        candles_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.lbl_candles_label = QLabel("Velas cargadas:")
+        self.lbl_candles_label.setStyleSheet("color: #aaa; font-size: 11px;")
+        
+        self.lbl_candles_count = QLabel("100")
+        self.lbl_candles_count.setStyleSheet("font-weight: bold; color: #00ff00; font-size: 12px;")
+        
+        candles_layout.addWidget(self.lbl_candles_label)
+        candles_layout.addWidget(self.lbl_candles_count)
+        
+        # Separadores
         separator1 = QFrame()
         separator1.setFrameShape(QFrame.VLine)
         separator1.setFrameShadow(QFrame.Sunken)
@@ -262,6 +272,12 @@ class MainWindow(QMainWindow):
         separator2.setStyleSheet("background-color: #444;")
         separator2.setMaximumWidth(2)
         
+        separator3 = QFrame()
+        separator3.setFrameShape(QFrame.VLine)
+        separator3.setFrameShadow(QFrame.Sunken)
+        separator3.setStyleSheet("background-color: #444;")
+        separator3.setMaximumWidth(2)
+        
         # Versión/estado
         self.lbl_status_info = QLabel("Versión 1.0 | Modo: Demo")
         self.lbl_status_info.setStyleSheet("color: #aaa; font-size: 11px;")
@@ -273,6 +289,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(server_group)
         layout.addWidget(separator2)
         layout.addWidget(account_group)
+        layout.addWidget(separator3)
+        layout.addWidget(candles_group)
         layout.addStretch()
         layout.addWidget(self.lbl_status_info)
         
@@ -290,7 +308,12 @@ class MainWindow(QMainWindow):
         self.lbl_local_time = QLabel("Local: --:--:--")
         self.lbl_local_time.setStyleSheet("color: #0af; font-weight: bold;")
         
+        # Contador de datos
+        self.lbl_data_count = QLabel("Velas: 0")
+        self.lbl_data_count.setStyleSheet("color: #4cd964; font-weight: bold;")
+        
         self.statusBar().addPermanentWidget(self.lbl_status_data)
+        self.statusBar().addPermanentWidget(self.lbl_data_count)
         self.statusBar().addPermanentWidget(self.lbl_local_time)
     
     def setup_timers(self):
@@ -335,7 +358,6 @@ class MainWindow(QMainWindow):
                 self.lbl_server_time.setText(f"🕒 Hora servidor: {date_str} {time_str} ({self.server_timezone})")
                 
             except Exception as e:
-                self.log_message(f"⚠️ Error actualizando hora servidor: {str(e)}")
                 # Si hay error, mostrar hora local
                 local_time = datetime.now()
                 self.lbl_server_time.setText(f"🕒 Hora local: {local_time.strftime('%d/%m/%Y %H:%M:%S')}")
@@ -351,7 +373,6 @@ class MainWindow(QMainWindow):
     
     def connect_to_mt5(self):
         """Conectar a MT5."""
-        self.log_message("🔌 Intentando conectar a MT5...")
         self.btn_connect.setEnabled(False)
         self.btn_connect.setText("Conectando...")
         
@@ -387,9 +408,6 @@ class MainWindow(QMainWindow):
                 # Actualizar información de cuenta y servidor
                 self.update_account_info(result['data'])
                 
-                # Sincronizar controles con los paneles
-                self.sync_ui_with_panels()
-                
                 # Obtener configuraciones de indicadores del control panel
                 if hasattr(self.control_panel, 'get_indicator_configurations'):
                     indicator_configs = self.control_panel.get_indicator_configurations()
@@ -400,20 +418,11 @@ class MainWindow(QMainWindow):
                 self.timer_sync_server_time.start()
                 self.timer_prices.start()
                 self.refresh_data()
-                
-                self.log_message(f"✅ Conectado exitosamente a MT5")
-                self.log_message(f"   Servidor: {server_info}")
-                if 'account_info' in result['data']:
-                    acc_info = result['data']['account_info']
-                    self.log_message(f"   Cuenta: {acc_info.get('login', 'N/A')}")
-                    self.log_message(f"   Nombre: {acc_info.get('name', 'N/A')}")
             else:
                 self.update_connection_status(False, f"❌ Error: {result['message']}")
-                self.log_message(f"❌ Error de conexión: {result['message']}")
                 
         except Exception as e:
             self.update_connection_status(False, f"❌ Excepción: {str(e)}")
-            self.log_message(f"❌ Excepción en conexión: {str(e)}")
         finally:
             self.btn_connect.setEnabled(True)
             self.btn_connect.setText("🔌 Conectar a MT5")
@@ -440,17 +449,13 @@ class MainWindow(QMainWindow):
                 
                 # Actualizar display inmediatamente
                 self.lbl_server_time.setText(f"🕒 Hora servidor: {date_str} {time_str} ({self.server_timezone})")
-                
-                self.log_message(f"🕒 Hora servidor MT5: {date_str} {time_str} ({self.server_timezone})")
             else:
-                self.log_message("⚠️ No se pudo obtener hora del servidor desde MT5")
                 # Fallback: usar hora local
                 self.server_time = datetime.now()
                 self.server_timezone = "LOCAL"
                 self.lbl_server_time.setText(f"🕒 Hora local: {self.server_time.strftime('%d/%m/%Y %H:%M:%S')}")
                 
         except Exception as e:
-            self.log_message(f"⚠️ Error obteniendo hora servidor MT5: {str(e)}")
             # Fallback a hora local
             self.server_time = datetime.now()
             self.server_timezone = "LOCAL"
@@ -514,8 +519,6 @@ class MainWindow(QMainWindow):
             
             # Actualizar paneles
             self.control_panel.update_connection_status(False)
-            
-            self.log_message("🔌 Desconectado de MT5")
     
     def update_connection_status(self, connected, message):
         """Actualizar estado de conexión en UI."""
@@ -573,7 +576,6 @@ class MainWindow(QMainWindow):
                 self.control_panel.update_account_info(acc_info)
                 
         except Exception as e:
-            self.log_message(f"⚠️ Error actualizando cuenta: {str(e)}")
             self.lbl_account_info.setText("Error")
             self.lbl_account_info.setStyleSheet("font-weight: bold; color: #ff6b6b; font-size: 12px;")
     
@@ -585,18 +587,16 @@ class MainWindow(QMainWindow):
             return
         
         try:
-            # Obtener datos históricos
+            # Obtener datos históricos CON CANTIDAD DE VELAS CONFIGURABLE
             result = self.data_use_case.get_historical_data(
                 symbol=self.current_symbol,
                 timeframe=self.current_timeframe,
-                count=100
+                count=self.current_candles_count  # Usar cantidad configurable
             )
             
             if result['success']:
                 data = result['data']
                 symbol_info = result.get('symbol_info')
-                
-                self.log_message(f"📊 Datos obtenidos: {len(data)} velas")
                 
                 # Obtener datos en tiempo real para precio actual
                 real_time_result = self.data_use_case.get_real_time_data(self.current_symbol)
@@ -621,12 +621,16 @@ class MainWindow(QMainWindow):
                 if real_time_data:
                     self.control_panel.update_price_display(real_time_data)
                 
-                self.lbl_status_data.setText(f"Datos: {len(data)} velas")
-            else:
-                self.log_message(f"❌ Error obteniendo datos: {result['message']}")
+                # Actualizar contador de velas
+                self.lbl_data_count.setText(f"Velas: {len(data)}")
+                self.lbl_candles_count.setText(f"{len(data)}")
+                self.lbl_status_data.setText(f"Datos: {len(data)} velas cargadas")
+                
+                # Log de información
+                self.control_panel.add_log_message(f"📊 {len(data)} velas cargadas para {self.current_symbol} ({self.current_timeframe})", "DATA")
                 
         except Exception as e:
-            self.log_message(f"❌ Error refrescando datos: {str(e)}")
+            self.control_panel.add_log_message(f"❌ Error al cargar datos: {str(e)}", "ERROR")
     
     def update_prices(self):
         """Actualizar precios en tiempo real."""
@@ -647,7 +651,7 @@ class MainWindow(QMainWindow):
                 self.control_panel.update_price_display(data)
                 
         except Exception as e:
-            self.log_message(f"❌ Error actualizando precios: {str(e)}")
+            pass
     
     def refresh_positions(self):
         """Actualizar lista de posiciones."""
@@ -655,26 +659,24 @@ class MainWindow(QMainWindow):
             return
         
         # Aquí puedes agregar lógica para obtener posiciones reales
-        self.log_message("🔄 Actualizando posiciones...")
     
     # ===== MÉTODOS DE TRADING =====
     
     def on_buy_requested(self, order_details):
         """Manejador para solicitud de compra."""
-        self.log_message(f"📤 Solicitando COMPRA: {order_details}")
         # Aquí integrarías con el caso de uso open_position
+        pass
     
     def on_sell_requested(self, order_details):
         """Manejador para solicitud de venta."""
-        self.log_message(f"📤 Solicitando VENTA: {order_details}")
         # Aquí integrarías con el caso de uso open_position
+        pass
     
     # ===== MANEJADORES DE EVENTOS =====
     
     def on_symbol_changed(self, symbol):
         """Manejador para cambio de símbolo."""
         self.current_symbol = symbol
-        self.log_message(f"📈 Símbolo cambiado a: {symbol}")
         
         # Sincronizar chart view
         self.chart_view.current_symbol = symbol
@@ -688,7 +690,6 @@ class MainWindow(QMainWindow):
     def on_timeframe_changed(self, timeframe):
         """Manejador para cambio de timeframe."""
         self.current_timeframe = timeframe
-        self.log_message(f"⏰ Timeframe cambiado a: {timeframe}")
         
         # Sincronizar chart view
         self.chart_view.current_timeframe = timeframe
@@ -701,10 +702,16 @@ class MainWindow(QMainWindow):
         if self.is_connected:
             self.refresh_data()
     
+    def on_candles_count_changed(self, count):
+        """Manejador para cambio en cantidad de velas."""
+        self.current_candles_count = count
+        self.lbl_candles_count.setText(f"{count}")
+        
+        if self.is_connected:
+            self.refresh_data()
+    
     def on_indicator_settings_changed(self, indicator_name, settings):
         """Manejador para cambio de configuración de indicador."""
-        self.log_message(f"⚙️ Configuración de {indicator_name} actualizada")
-        
         # Obtener configuraciones actualizadas
         if hasattr(self.control_panel, 'get_indicator_configurations'):
             indicator_configs = self.control_panel.get_indicator_configurations()
@@ -720,25 +727,6 @@ class MainWindow(QMainWindow):
         """Sincronizar la UI superior con los paneles."""
         # No es necesario sincronizar controles removidos
         pass
-    
-    # ===== UTILIDADES =====
-    
-    def log_message(self, message):
-        """Agregar mensaje a los logs."""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        log_entry = f"[{timestamp}] {message}"
-        
-        # Mini log
-        self.txt_mini_log.append(log_entry)
-        
-        # Mantener mini log limitado
-        lines = self.txt_mini_log.toPlainText().split('\n')
-        if len(lines) > 10:
-            self.txt_mini_log.setPlainText('\n'.join(lines[-10:]))
-        
-        # Auto-scroll
-        scrollbar = self.txt_mini_log.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
     
     def closeEvent(self, event):
         """Manejador para cerrar la ventana."""
