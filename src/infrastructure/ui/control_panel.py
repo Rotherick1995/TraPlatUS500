@@ -56,17 +56,18 @@ class ControlPanel(QWidget):
         self.max_candles_count = 10000
         self.current_candles_count = self.default_candles_count
         
-        # NUEVO: Diccionario de información de símbolos
+        # NUEVO: Diccionario de información de símbolos (actualizado)
         self.symbol_info = {
-            'EURUSD': {'digits': 5, 'point': 0.00001, 'lot_size': 100000, 'tick_value': 10},
-            'US500': {'digits': 2, 'point': 0.01, 'lot_size': 1, 'tick_value': 1},
-            'GBPUSD': {'digits': 5, 'point': 0.00001, 'lot_size': 100000, 'tick_value': 10},
-            'USDJPY': {'digits': 3, 'point': 0.001, 'lot_size': 100000, 'tick_value': 1000},
-            'XAUUSD': {'digits': 2, 'point': 0.01, 'lot_size': 100, 'tick_value': 10}
+            'EURUSD': {'digits': 5, 'point': 0.00001, 'lot_size': 100000, 'tick_value': 10, 'tick_size': 0.00001},
+            'US500': {'digits': 2, 'point': 0.01, 'lot_size': 1, 'tick_value': 1, 'tick_size': 0.01},
+            'GBPUSD': {'digits': 5, 'point': 0.00001, 'lot_size': 100000, 'tick_value': 10, 'tick_size': 0.00001},
+            'USDJPY': {'digits': 3, 'point': 0.001, 'lot_size': 100000, 'tick_value': 1000, 'tick_size': 0.001},
+            'XAUUSD': {'digits': 2, 'point': 0.01, 'lot_size': 100, 'tick_value': 10, 'tick_size': 0.01}
         }
         
         # NUEVO: Precio actual para cálculos
-        self.current_price = 0.0
+        self.current_bid_price = 0.0
+        self.current_ask_price = 0.0
         
         # Instancias de indicadores de dominio
         self.indicators = {
@@ -1153,71 +1154,199 @@ class ControlPanel(QWidget):
         Calcular valor en dólares de SL/TP basado en pips.
         
         Args:
-            pips: Cantidad de pips
+            pips: Cantidad de pips (puede ser positivo o negativo)
             operation_type: 'buy' o 'sell'
             
         Returns:
-            dict: {'dollars': valor en dólares, 'pips': pips originales}
+            dict: {'dollars': valor en dólares, 'pips': pips originales, 'type': 'pips' o 'level'}
         """
-        if not self.current_price or pips == 0:
-            return {'dollars': 0.0, 'pips': pips}
-        
         symbol = self.current_symbol
         if symbol not in self.symbol_info:
-            return {'dollars': 0.0, 'pips': pips}
+            return {'dollars': 0.0, 'pips': pips, 'type': 'error'}
         
         info = self.symbol_info[symbol]
         volume = self.spin_volume.value()
         
-        # Calcular valor por pip
-        # Fórmula general: Valor por pip = (pip en decimales * volumen * tamaño del lote) / tasa de cambio
-        # Simplificamos usando tick_value predefinido
-        pip_value = (pips / info['point']) * volume * info['tick_value']
+        # Si pips es negativo, interpretar como nivel absoluto
+        if pips < 0:
+            # Para niveles absolutos, el valor en dólares depende de la diferencia con el precio actual
+            if operation_type == 'buy':
+                # Para compras: si el nivel es más bajo que el precio actual, es pérdida
+                current_price = self.current_ask_price
+                level = abs(pips) * info['tick_size']
+                price_diff = abs(current_price - level)
+            else:
+                # Para ventas: si el nivel es más alto que el precio actual, es pérdida
+                current_price = self.current_bid_price
+                level = abs(pips) * info['tick_size']
+                price_diff = abs(level - current_price)
+            
+            # Calcular valor en dólares basado en la diferencia de precio
+            pip_value = (price_diff / info['point']) * volume * info['tick_value']
+            
+            return {
+                'dollars': abs(pip_value),
+                'pips': pips,
+                'type': 'level',
+                'level': level
+            }
+        else:
+            # Pips positivos: calcular normalmente
+            pip_value = (pips / info['point']) * volume * info['tick_value']
+            
+            return {
+                'dollars': abs(pip_value),
+                'pips': pips,
+                'type': 'pips'
+            }
+    
+    def calculate_sl_tp_levels(self, operation_type: str, price: float, sl_pips: float, tp_pips: float) -> dict:
+        """
+        Calcular niveles de SL y TP basado en pips (positivos o negativos).
+        
+        Args:
+            operation_type: 'buy' o 'sell'
+            price: Precio de entrada
+            sl_pips: Pips para SL (positivo = distancia, negativo = nivel absoluto)
+            tp_pips: Pips para TP (positivo = distancia, negativo = nivel absoluto)
+        
+        Returns:
+            dict: {'sl_level': precio, 'tp_level': precio, 'sl_distance': pips, 'tp_distance': pips}
+        """
+        if not price or price <= 0:
+            return {'sl_level': 0, 'tp_level': 0, 'sl_distance': 0, 'tp_distance': 0}
+        
+        symbol = self.current_symbol
+        if symbol not in self.symbol_info:
+            return {'sl_level': 0, 'tp_level': 0, 'sl_distance': 0, 'tp_distance': 0}
+        
+        info = self.symbol_info[symbol]
+        point = info['point']
+        tick_size = info.get('tick_size', point)
+        
+        # Calcular niveles
+        if operation_type == 'buy':
+            # Para compras:
+            # - SL debe estar POR DEBAJO del precio de entrada (menor valor)
+            # - TP debe estar POR ENCIMA del precio de entrada (mayor valor)
+            
+            if sl_pips < 0:
+                # Si es negativo, interpretar como nivel absoluto
+                sl_level = abs(sl_pips) * tick_size if sl_pips != 0 else 0
+            else:
+                # Si es positivo, calcular distancia desde precio
+                sl_level = price - (sl_pips * point)
+            
+            if tp_pips < 0:
+                # Si es negativo, interpretar como nivel absoluto
+                tp_level = abs(tp_pips) * tick_size if tp_pips != 0 else 0
+            else:
+                # Si es positivo, calcular distancia desde precio
+                tp_level = price + (tp_pips * point)
+        
+        else:  # sell
+            # Para ventas:
+            # - SL debe estar POR ENCIMA del precio de entrada (mayor valor)
+            # - TP debe estar POR DEBAJO del precio de entrada (menor valor)
+            
+            if sl_pips < 0:
+                # Si es negativo, interpretar como nivel absoluto
+                sl_level = abs(sl_pips) * tick_size if sl_pips != 0 else 0
+            else:
+                # Si es positivo, calcular distancia desde precio
+                sl_level = price + (sl_pips * point)
+            
+            if tp_pips < 0:
+                # Si es negativo, interpretar como nivel absoluto
+                tp_level = abs(tp_pips) * tick_size if tp_pips != 0 else 0
+            else:
+                # Si es positivo, calcular distancia desde precio
+                tp_level = price - (tp_pips * point)
+        
+        # Calcular distancia en pips
+        sl_distance = abs((price - sl_level) / point) if sl_level > 0 else 0
+        tp_distance = abs((tp_level - price) / point) if tp_level > 0 else 0
         
         return {
-            'dollars': abs(pip_value),
-            'pips': pips
+            'sl_level': sl_level,
+            'tp_level': tp_level,
+            'sl_distance': sl_distance,
+            'tp_distance': tp_distance
         }
     
     def update_sl_display(self):
         """Actualizar display de Stop Loss."""
         sl_pips = self.spin_sl.value()
-        calculation = self.calculate_sl_tp_dollars(sl_pips)
         
-        # Actualizar tooltip con información detallada
-        symbol_info = self.symbol_info.get(self.current_symbol, {})
-        tooltip_text = f"""
-        Stop Loss ({self.current_symbol}):
-        • Pips: {sl_pips}
-        • Valor en dólares: ${calculation['dollars']:.2f}
-        • Punto: {symbol_info.get('point', 0.00001)}
-        • Dígitos: {symbol_info.get('digits', 5)}
-        """
-        self.spin_sl.setToolTip(tooltip_text.strip())
-        
-        # Actualizar label si existe
-        if hasattr(self, 'lbl_sl_value'):
-            self.lbl_sl_value.setText(f"SL: {sl_pips} pips (${calculation['dollars']:.2f})")
+        # Mostrar información sobre SL negativo
+        if sl_pips < 0:
+            symbol_info = self.symbol_info.get(self.current_symbol, {})
+            sl_level = abs(sl_pips) * symbol_info.get('tick_size', symbol_info.get('point', 0.00001))
+            
+            tooltip_text = f"""
+            Stop Loss ({self.current_symbol}):
+            • Nivel absoluto: {sl_level:.5f}
+            • Pips ingresados: {sl_pips} (negativo = nivel absoluto)
+            • Punto: {symbol_info.get('point', 0.00001)}
+            • Tick size: {symbol_info.get('tick_size', 0.00001)}
+            • Dígitos: {symbol_info.get('digits', 5)}
+            """
+            self.spin_sl.setToolTip(tooltip_text.strip())
+            
+            if hasattr(self, 'lbl_sl_value'):
+                self.lbl_sl_value.setText(f"SL: Nivel {sl_level:.5f}")
+        else:
+            calculation = self.calculate_sl_tp_dollars(sl_pips)
+            
+            symbol_info = self.symbol_info.get(self.current_symbol, {})
+            tooltip_text = f"""
+            Stop Loss ({self.current_symbol}):
+            • Pips: {sl_pips}
+            • Valor en dólares: ${calculation['dollars']:.2f}
+            • Punto: {symbol_info.get('point', 0.00001)}
+            • Dígitos: {symbol_info.get('digits', 5)}
+            """
+            self.spin_sl.setToolTip(tooltip_text.strip())
+            
+            if hasattr(self, 'lbl_sl_value'):
+                self.lbl_sl_value.setText(f"SL: {sl_pips} pips (${calculation['dollars']:.2f})")
     
     def update_tp_display(self):
         """Actualizar display de Take Profit."""
         tp_pips = self.spin_tp.value()
-        calculation = self.calculate_sl_tp_dollars(tp_pips)
         
-        # Actualizar tooltip con información detallada
-        symbol_info = self.symbol_info.get(self.current_symbol, {})
-        tooltip_text = f"""
-        Take Profit ({self.current_symbol}):
-        • Pips: {tp_pips}
-        • Valor en dólares: ${calculation['dollars']:.2f}
-        • Punto: {symbol_info.get('point', 0.00001)}
-        • Dígitos: {symbol_info.get('digits', 5)}
-        """
-        self.spin_tp.setToolTip(tooltip_text.strip())
-        
-        # Actualizar label si existe
-        if hasattr(self, 'lbl_tp_value'):
-            self.lbl_tp_value.setText(f"TP: {tp_pips} pips (${calculation['dollars']:.2f})")
+        # Mostrar información sobre TP negativo
+        if tp_pips < 0:
+            symbol_info = self.symbol_info.get(self.current_symbol, {})
+            tp_level = abs(tp_pips) * symbol_info.get('tick_size', symbol_info.get('point', 0.00001))
+            
+            tooltip_text = f"""
+            Take Profit ({self.current_symbol}):
+            • Nivel absoluto: {tp_level:.5f}
+            • Pips ingresados: {tp_pips} (negativo = nivel absoluto)
+            • Punto: {symbol_info.get('point', 0.00001)}
+            • Tick size: {symbol_info.get('tick_size', 0.00001)}
+            • Dígitos: {symbol_info.get('digits', 5)}
+            """
+            self.spin_tp.setToolTip(tooltip_text.strip())
+            
+            if hasattr(self, 'lbl_tp_value'):
+                self.lbl_tp_value.setText(f"TP: Nivel {tp_level:.5f}")
+        else:
+            calculation = self.calculate_sl_tp_dollars(tp_pips)
+            
+            symbol_info = self.symbol_info.get(self.current_symbol, {})
+            tooltip_text = f"""
+            Take Profit ({self.current_symbol}):
+            • Pips: {tp_pips}
+            • Valor en dólares: ${calculation['dollars']:.2f}
+            • Punto: {symbol_info.get('point', 0.00001)}
+            • Dígitos: {symbol_info.get('digits', 5)}
+            """
+            self.spin_tp.setToolTip(tooltip_text.strip())
+            
+            if hasattr(self, 'lbl_tp_value'):
+                self.lbl_tp_value.setText(f"TP: {tp_pips} pips (${calculation['dollars']:.2f})")
     
     def update_risk_reward_ratio(self):
         """Actualizar ratio riesgo/recompensa."""
@@ -1228,6 +1357,9 @@ class ControlPanel(QWidget):
             ratio = tp_pips / sl_pips
             if hasattr(self, 'lbl_risk_reward'):
                 self.lbl_risk_reward.setText(f"R/R: 1:{ratio:.2f}")
+        elif sl_pips < 0 or tp_pips < 0:
+            if hasattr(self, 'lbl_risk_reward'):
+                self.lbl_risk_reward.setText(f"R/R: Niveles absolutos")
     
     # ===== MÉTODOS PARA LOGS =====
     
@@ -1824,7 +1956,6 @@ class ControlPanel(QWidget):
         bb_check_layout = QHBoxLayout()
         self.bb_checkbox = QCheckBox("Habilitar Bandas de Bollinger")
         self.bb_checkbox.setChecked(self.indicators['bollinger'].config.enabled)
-        # CORRECCIÓN: Conectar al método correcto para habilitar/deshabilitar
         self.bb_checkbox.stateChanged.connect(self.on_bollinger_changed)
         self.bb_checkbox.setStyleSheet(checkbox_style)
         bb_check_layout.addWidget(self.bb_checkbox)
@@ -1838,7 +1969,6 @@ class ControlPanel(QWidget):
         self.bb_period_spin = QSpinBox()
         self.bb_period_spin.setRange(10, 50)
         self.bb_period_spin.setValue(self.indicators['bollinger'].config.params['period'])
-        # CORRECCIÓN: Conectar al método específico para cambios de parámetros
         self.bb_period_spin.valueChanged.connect(self.on_bollinger_params_changed)
         self.bb_period_spin.setStyleSheet(spinbox_style)
         bb_period_layout.addWidget(self.bb_period_spin)
@@ -1854,7 +1984,6 @@ class ControlPanel(QWidget):
         self.bb_std_spin.setSingleStep(0.1)
         self.bb_std_spin.setDecimals(1)
         self.bb_std_spin.setValue(self.indicators['bollinger'].config.params['std_multiplier'])
-        # CORRECCIÓN: Conectar al método específico para cambios de parámetros
         self.bb_std_spin.valueChanged.connect(self.on_bollinger_params_changed)
         self.bb_std_spin.setStyleSheet(spinbox_style)
         bb_std_layout.addWidget(self.bb_std_spin)
@@ -2484,7 +2613,7 @@ class ControlPanel(QWidget):
         
         return widget
     
-    # ===== PESTAÑA DE TRADING (MODIFICADA) =====
+    # ===== PESTAÑA DE TRADING (MODIFICADA CON SL/TP NEGATIVOS) =====
     
     def create_trading_tab(self):
         """Crear pestaña de trading."""
@@ -2527,10 +2656,10 @@ class ControlPanel(QWidget):
         symbol_layout.addWidget(self.cmb_timeframe, 1, 1)
         
         # Precio actual
-        self.lbl_current_price = QLabel("Precio: --")
+        self.lbl_current_price = QLabel("Bid: -- | Ask: --")
         symbol_layout.addWidget(self.lbl_current_price, 2, 0, 1, 2)
         
-        # 3. Grupo de operación rápida (MODIFICADO)
+        # 3. Grupo de operación rápida (MODIFICADO PARA SL/TP NEGATIVOS)
         group_quick_trade = QGroupBox("Operación Rápida")
         trade_layout = QGridLayout(group_quick_trade)
         
@@ -2544,12 +2673,13 @@ class ControlPanel(QWidget):
         self.spin_volume.valueChanged.connect(self.update_trade_calculations)
         trade_layout.addWidget(self.spin_volume, 0, 1)
         
-        # Stop Loss (pips)
+        # Stop Loss (pips - permite negativos)
         trade_layout.addWidget(QLabel("Stop Loss:"), 1, 0)
         self.spin_sl = QSpinBox()
-        self.spin_sl.setRange(0, 1000)
+        self.spin_sl.setRange(-1000, 1000)  # Permite valores negativos
         self.spin_sl.setValue(self.default_sl)
         self.spin_sl.setSingleStep(10)
+        self.spin_sl.setSpecialValueText("0 (Sin SL)")
         self.spin_sl.valueChanged.connect(self.update_trade_calculations)
         trade_layout.addWidget(self.spin_sl, 1, 1)
         
@@ -2558,12 +2688,13 @@ class ControlPanel(QWidget):
         self.lbl_sl_value.setStyleSheet("color: #ff6666; font-size: 10px;")
         trade_layout.addWidget(self.lbl_sl_value, 2, 0, 1, 2)
         
-        # Take Profit (pips)
+        # Take Profit (pips - permite negativos)
         trade_layout.addWidget(QLabel("Take Profit:"), 3, 0)
         self.spin_tp = QSpinBox()
-        self.spin_tp.setRange(0, 2000)
+        self.spin_tp.setRange(-2000, 2000)  # Permite valores negativos
         self.spin_tp.setValue(self.default_tp)
         self.spin_tp.setSingleStep(10)
+        self.spin_tp.setSpecialValueText("0 (Sin TP)")
         self.spin_tp.valueChanged.connect(self.update_trade_calculations)
         trade_layout.addWidget(self.spin_tp, 3, 1)
         
@@ -2572,28 +2703,68 @@ class ControlPanel(QWidget):
         self.lbl_tp_value.setStyleSheet("color: #66ff66; font-size: 10px;")
         trade_layout.addWidget(self.lbl_tp_value, 4, 0, 1, 2)
         
+        # Información sobre SL/TP negativos
+        info_label = QLabel("💡 SL/TP negativos = niveles de precio absolutos (ej: -112.50)")
+        info_label.setStyleSheet("color: #888; font-size: 9px; font-style: italic;")
+        info_label.setWordWrap(True)
+        trade_layout.addWidget(info_label, 5, 0, 1, 2)
+        
         # Ratio riesgo/recompensa
         self.lbl_risk_reward = QLabel("R/R: 1:0.00")
         self.lbl_risk_reward.setStyleSheet("color: #ffff66; font-size: 11px; font-weight: bold;")
-        trade_layout.addWidget(self.lbl_risk_reward, 5, 0, 1, 2)
+        trade_layout.addWidget(self.lbl_risk_reward, 6, 0, 1, 2)
         
         # Comentario
-        trade_layout.addWidget(QLabel("Comentario:"), 6, 0)
+        trade_layout.addWidget(QLabel("Comentario:"), 7, 0)
         self.txt_comment = QLineEdit()
         self.txt_comment.setPlaceholderText("Operación manual")
-        trade_layout.addWidget(self.txt_comment, 6, 1)
+        trade_layout.addWidget(self.txt_comment, 7, 1)
         
         # Botones de operación
         self.btn_buy = QPushButton("🟢 COMPRAR")
         self.btn_buy.clicked.connect(self.on_buy_clicked)
         self.btn_buy.setEnabled(False)
+        self.btn_buy.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 10px;
+                font-weight: bold;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+            QPushButton:disabled {
+                background-color: #666;
+            }
+        """)
         
         self.btn_sell = QPushButton("🔴 VENDER")
         self.btn_sell.clicked.connect(self.on_sell_clicked)
         self.btn_sell.setEnabled(False)
+        self.btn_sell.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+                border: none;
+                padding: 10px;
+                font-weight: bold;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+            QPushButton:disabled {
+                background-color: #666;
+            }
+        """)
         
-        trade_layout.addWidget(self.btn_buy, 7, 0, 1, 2)
-        trade_layout.addWidget(self.btn_sell, 8, 0, 1, 2)
+        trade_layout.addWidget(self.btn_buy, 8, 0, 1, 2)
+        trade_layout.addWidget(self.btn_sell, 9, 0, 1, 2)
         
         # Agregar grupos al layout
         layout.addWidget(group_connection)
@@ -2729,14 +2900,14 @@ class ControlPanel(QWidget):
         # SL por defecto
         trading_layout.addWidget(QLabel("SL por defecto (pips):"), 1, 0)
         self.spin_default_sl = QSpinBox()
-        self.spin_default_sl.setRange(0, 1000)
+        self.spin_default_sl.setRange(-1000, 1000)  # Permite negativos
         self.spin_default_sl.setValue(self.default_sl)
         trading_layout.addWidget(self.spin_default_sl, 1, 1)
         
         # TP por defecto
         trading_layout.addWidget(QLabel("TP por defecto (pips):"), 2, 0)
         self.spin_default_tp = QSpinBox()
-        self.spin_default_tp.setRange(0, 2000)
+        self.spin_default_tp.setRange(-2000, 2000)  # Permite negativos
         self.spin_default_tp.setValue(self.default_tp)
         trading_layout.addWidget(self.spin_default_tp, 2, 1)
         
@@ -2789,7 +2960,7 @@ class ControlPanel(QWidget):
             self.btn_sell.setEnabled(True)
             self.btn_refresh_positions.setEnabled(True)
             self.btn_close_all.setEnabled(True)
-            self.btn_refresh_orders.setEnabled(True)  # NUEVO: Habilitar refrescar órdenes
+            self.btn_refresh_orders.setEnabled(True)
         else:
             self.lbl_connection.setText("❌ Desconectado")
             if message:
@@ -2802,7 +2973,7 @@ class ControlPanel(QWidget):
             self.btn_sell.setEnabled(False)
             self.btn_refresh_positions.setEnabled(False)
             self.btn_close_all.setEnabled(False)
-            self.btn_refresh_orders.setEnabled(False)  # NUEVO: Deshabilitar refrescar órdenes
+            self.btn_refresh_orders.setEnabled(False)
     
     def update_account_info(self, account_info):
         """Actualizar información de cuenta."""
@@ -2874,14 +3045,14 @@ class ControlPanel(QWidget):
     def update_price_display(self, price_data=None):
         """Actualizar display de precios."""
         if price_data:
-            current_price = price_data.get('bid', 0)
-            self.current_price = current_price
-            self.lbl_current_price.setText(f"Precio: {current_price:.5f}")
+            self.current_bid_price = price_data.get('bid', 0)
+            self.current_ask_price = price_data.get('ask', 0)
+            self.lbl_current_price.setText(f"Bid: {self.current_bid_price:.5f} | Ask: {self.current_ask_price:.5f}")
             
             # Actualizar cálculos cuando cambia el precio
             self.update_trade_calculations()
     
-    # ===== MANEJADORES DE EVENTOS MODIFICADOS PARA REGISTRAR ÓRDENES =====
+    # ===== MANEJADORES DE EVENTOS MODIFICADOS =====
     
     def on_connect_clicked(self):
         """Manejador para botón de conexión."""
@@ -2910,48 +3081,50 @@ class ControlPanel(QWidget):
     def on_buy_clicked(self):
         """Manejador para botón de compra."""
         try:
-            # Calcular valores exactos
-            sl_calc = self.calculate_sl_tp_dollars(self.spin_sl.value())
-            tp_calc = self.calculate_sl_tp_dollars(self.spin_tp.value())
+            if not self.is_connected:
+                self.add_log_message("❌ No hay conexión a MT5", "ERROR")
+                return
+            
+            if self.current_ask_price <= 0:
+                self.add_log_message("❌ No se pudo obtener el precio de compra", "ERROR")
+                return
+            
+            # Calcular niveles de SL/TP
+            sl_pips = self.spin_sl.value()
+            tp_pips = self.spin_tp.value()
+            
+            levels = self.calculate_sl_tp_levels('buy', self.current_ask_price, sl_pips, tp_pips)
             
             order_details = {
                 'symbol': self.current_symbol,
                 'volume': self.spin_volume.value(),
-                'sl': self.spin_sl.value(),
-                'tp': self.spin_tp.value(),
-                'sl_dollars': sl_calc['dollars'],
-                'tp_dollars': tp_calc['dollars'],
+                'sl': sl_pips,
+                'tp': tp_pips,
+                'sl_level': levels['sl_level'],
+                'tp_level': levels['tp_level'],
                 'comment': self.txt_comment.text() or "Compra manual",
                 'type': 0,  # 0 = compra
-                'price': self.current_price if self.current_price > 0 else 0
+                'price': self.current_ask_price,
+                'operation': 'buy'
             }
             
             self.add_log_message(f"📈 Orden de COMPRA enviada:", "TRADE")
             self.add_log_message(f"   • Símbolo: {order_details['symbol']}", "TRADE")
             self.add_log_message(f"   • Volumen: {order_details['volume']} lotes", "TRADE")
-            self.add_log_message(f"   • SL: {order_details['sl']} pips (${order_details['sl_dollars']:.2f})", "TRADE")
-            self.add_log_message(f"   • TP: {order_details['tp']} pips (${order_details['tp_dollars']:.2f})", "TRADE")
+            self.add_log_message(f"   • Precio: {order_details['price']:.5f}", "TRADE")
+            
+            if sl_pips < 0:
+                self.add_log_message(f"   • SL: Nivel {order_details['sl_level']:.5f}", "TRADE")
+            else:
+                self.add_log_message(f"   • SL: {sl_pips} pips ({order_details['sl_level']:.5f})", "TRADE")
+            
+            if tp_pips < 0:
+                self.add_log_message(f"   • TP: Nivel {order_details['tp_level']:.5f}", "TRADE")
+            else:
+                self.add_log_message(f"   • TP: {tp_pips} pips ({order_details['tp_level']:.5f})", "TRADE")
             
             # Emitir señal para ejecutar en MT5
             self.buy_requested.emit(order_details)
-            
-            # Crear registro local de la orden
-            order_record = {
-                'ticket': len(self.orders) + 1,  # Ticket temporal
-                'symbol': order_details['symbol'],
-                'type': 0,  # Compra
-                'volume': order_details['volume'],
-                'price': order_details['price'],
-                'sl': order_details['sl'],
-                'tp': order_details['tp'],
-                'profit': 0.0,  # Inicialmente 0
-                'comment': order_details['comment'],
-                'time': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                'status': 'Enviada'
-            }
-            
-            # Agregar a la lista de órdenes
-            self.add_order(order_record)
             
         except Exception as e:
             self.add_log_message(f"❌ Error en orden de compra: {str(e)}", "ERROR")
@@ -2959,48 +3132,50 @@ class ControlPanel(QWidget):
     def on_sell_clicked(self):
         """Manejador para botón de venta."""
         try:
-            # Calcular valores exactos
-            sl_calc = self.calculate_sl_tp_dollars(self.spin_sl.value())
-            tp_calc = self.calculate_sl_tp_dollars(self.spin_tp.value())
+            if not self.is_connected:
+                self.add_log_message("❌ No hay conexión a MT5", "ERROR")
+                return
+            
+            if self.current_bid_price <= 0:
+                self.add_log_message("❌ No se pudo obtener el precio de venta", "ERROR")
+                return
+            
+            # Calcular niveles de SL/TP
+            sl_pips = self.spin_sl.value()
+            tp_pips = self.spin_tp.value()
+            
+            levels = self.calculate_sl_tp_levels('sell', self.current_bid_price, sl_pips, tp_pips)
             
             order_details = {
                 'symbol': self.current_symbol,
                 'volume': self.spin_volume.value(),
-                'sl': self.spin_sl.value(),
-                'tp': self.spin_tp.value(),
-                'sl_dollars': sl_calc['dollars'],
-                'tp_dollars': tp_calc['dollars'],
+                'sl': sl_pips,
+                'tp': tp_pips,
+                'sl_level': levels['sl_level'],
+                'tp_level': levels['tp_level'],
                 'comment': self.txt_comment.text() or "Venta manual",
                 'type': 1,  # 1 = venta
-                'price': self.current_price if self.current_price > 0 else 0
+                'price': self.current_bid_price,
+                'operation': 'sell'
             }
             
             self.add_log_message(f"📉 Orden de VENTA enviada:", "TRADE")
             self.add_log_message(f"   • Símbolo: {order_details['symbol']}", "TRADE")
             self.add_log_message(f"   • Volumen: {order_details['volume']} lotes", "TRADE")
-            self.add_log_message(f"   • SL: {order_details['sl']} pips (${order_details['sl_dollars']:.2f})", "TRADE")
-            self.add_log_message(f"   • TP: {order_details['tp']} pips (${order_details['tp_dollars']:.2f})", "TRADE")
+            self.add_log_message(f"   • Precio: {order_details['price']:.5f}", "TRADE")
+            
+            if sl_pips < 0:
+                self.add_log_message(f"   • SL: Nivel {order_details['sl_level']:.5f}", "TRADE")
+            else:
+                self.add_log_message(f"   • SL: {sl_pips} pips ({order_details['sl_level']:.5f})", "TRADE")
+            
+            if tp_pips < 0:
+                self.add_log_message(f"   • TP: Nivel {order_details['tp_level']:.5f}", "TRADE")
+            else:
+                self.add_log_message(f"   • TP: {tp_pips} pips ({order_details['tp_level']:.5f})", "TRADE")
             
             # Emitir señal para ejecutar en MT5
             self.sell_requested.emit(order_details)
-            
-            # Crear registro local de la orden
-            order_record = {
-                'ticket': len(self.orders) + 1,  # Ticket temporal
-                'symbol': order_details['symbol'],
-                'type': 1,  # Venta
-                'volume': order_details['volume'],
-                'price': order_details['price'],
-                'sl': order_details['sl'],
-                'tp': order_details['tp'],
-                'profit': 0.0,  # Inicialmente 0
-                'comment': order_details['comment'],
-                'time': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                'status': 'Enviada'
-            }
-            
-            # Agregar a la lista de órdenes
-            self.add_order(order_record)
             
         except Exception as e:
             self.add_log_message(f"❌ Error en orden de venta: {str(e)}", "ERROR")
@@ -3020,17 +3195,14 @@ class ControlPanel(QWidget):
         
         if reply == QMessageBox.Yes:
             self.add_log_message("Solicitando cierre de todas las posiciones...", "TRADE")
-            # Cerrar cada posición
-            for position in self.positions:
-                ticket = position.get('ticket')
-                if ticket:
-                    # Aquí necesitarías implementar el cierre
-                    self.add_log_message(f"Cerrando posición {ticket}...", "TRADE")
+            # Aquí deberías emitir una señal para cerrar todas las posiciones
+            self.add_log_message("⚠️ Función de cerrar todo pendiente de implementar", "WARNING")
     
     def on_close_position(self, ticket):
         """Manejador para cerrar posición específica."""
         self.add_log_message(f"Solicitando cierre de posición {ticket}...", "TRADE")
-        # Aquí necesitarías implementar el cierre de posición individual
+        # Aquí deberías emitir una señal para cerrar la posición específica
+        self.add_log_message(f"⚠️ Función de cerrar posición {ticket} pendiente de implementar", "WARNING")
     
     def on_save_settings(self):
         """Guardar configuración."""
@@ -3068,6 +3240,50 @@ class ControlPanel(QWidget):
         except Exception as e:
             self.add_log_message(f"❌ Error al cargar configuración: {str(e)}", "ERROR")
             self.txt_settings_info.append(f"❌ Error: {str(e)}")
+    
+    # ===== MÉTODOS PARA MANEJAR RESULTADOS DE ÓRDENES MT5 =====
+    
+    def on_order_executed(self, success: bool, message: str, ticket: int = None, order_data: dict = None):
+        """Manejador para resultado de orden ejecutada en MT5."""
+        if success:
+            self.add_log_message(f"✅ Orden ejecutada exitosamente. Ticket: {ticket}", "TRADE")
+            
+            if order_data:
+                # Crear registro local de la orden
+                order_record = {
+                    'ticket': ticket,
+                    'symbol': order_data.get('symbol', ''),
+                    'type': order_data.get('type', 0),
+                    'volume': order_data.get('volume', 0),
+                    'price': order_data.get('price', 0),
+                    'sl': order_data.get('sl_level', 0),
+                    'tp': order_data.get('tp_level', 0),
+                    'profit': 0.0,  # Inicialmente 0
+                    'comment': order_data.get('comment', ''),
+                    'time': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    'status': 'Ejecutada'
+                }
+                
+                # Agregar a la lista de órdenes
+                self.add_order(order_record)
+        else:
+            self.add_log_message(f"❌ Error al ejecutar orden: {message}", "ERROR")
+    
+    def on_position_closed(self, success: bool, message: str, ticket: int = None):
+        """Manejador para resultado de posición cerrada en MT5."""
+        if success:
+            self.add_log_message(f"✅ Posición {ticket} cerrada exitosamente", "TRADE")
+            
+            # Actualizar la orden correspondiente en el historial
+            for order in self.orders:
+                if order.get('ticket') == ticket:
+                    order['status'] = 'Cerrada'
+                    order['time_close'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    break
+            
+            self.update_orders_table()
+        else:
+            self.add_log_message(f"❌ Error al cerrar posición {ticket}: {message}", "ERROR")
     
     # ===== UTILIDADES =====
     

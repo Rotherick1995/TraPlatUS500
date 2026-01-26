@@ -1,5 +1,3 @@
-# src/infrastructure/persistence/mt5/mt5_data_repository.py
-
 from datetime import datetime
 from typing import Optional, List, Dict, Any, Tuple
 import MetaTrader5 as mt5
