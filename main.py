@@ -17,6 +17,13 @@ try:
     from src.infrastructure.ui.main_window import MainWindow
     from src.application.use_cases.connect_to_mt5 import create_connect_to_mt5_use_case
     from src.application.use_cases.fetch_market_data import create_fetch_market_data_use_case
+    
+    # Importar los casos de uso adicionales
+    from src.application.use_cases.place_order import create_place_order_use_case
+    from src.application.use_cases.place_pending_order import create_place_pending_order_use_case
+    from src.application.use_cases.modify_position import create_modify_position_use_case
+    from src.application.use_cases.close_position import create_close_position_use_case
+    
     from src.infrastructure.persistence.mt5.mt5_connection import create_mt5_connection
     from src.infrastructure.persistence.mt5.mt5_data_repository import create_mt5_data_repository
     from src.infrastructure.persistence.mt5.mt5_order_repository import create_mt5_order_repository
@@ -74,8 +81,15 @@ class TradingApp:
         if INDICATORS_AVAILABLE:
             self.init_indicators()
         
+        # Instancias de casos de uso
         self.mt5_use_case = None
         self.data_use_case = None
+        self.place_order_use_case = None
+        self.place_pending_order_use_case = None
+        self.modify_position_use_case = None
+        self.close_position_use_case = None
+        
+        # Repositorios
         self.data_repository = None
         self.order_repository = None
         
@@ -175,19 +189,32 @@ class TradingApp:
             
             # Señales de trading
             if hasattr(control_panel, 'buy_requested'):
-                control_panel.buy_requested.connect(self.on_trading_signal)
+                control_panel.buy_requested.connect(self.execute_buy_order)
             if hasattr(control_panel, 'sell_requested'):
-                control_panel.sell_requested.connect(self.on_trading_signal)
+                control_panel.sell_requested.connect(self.execute_sell_order)
+            
+            # Señales de actualización
+            if hasattr(control_panel, 'symbol_changed'):
+                control_panel.symbol_changed.connect(self.on_control_panel_symbol_changed)
+            if hasattr(control_panel, 'timeframe_changed'):
+                control_panel.timeframe_changed.connect(self.on_control_panel_timeframe_changed)
+            if hasattr(control_panel, 'refresh_positions'):
+                control_panel.refresh_positions.connect(self.refresh_positions)
             
             # Señal de indicadores
             if hasattr(control_panel, 'indicators_updated'):
                 control_panel.indicators_updated.connect(self.on_indicators_updated_from_control)
                 self.log_message("✅ Señal de indicadores del ControlPanel conectada")
             
-            # NUEVO: Señal de cantidad de velas
+            # Señal de cantidad de velas
             if hasattr(control_panel, 'candles_count_changed'):
                 control_panel.candles_count_changed.connect(self.on_candles_count_changed)
                 self.log_message("✅ Señal de cantidad de velas conectada")
+            
+            # Señal de logs
+            if hasattr(control_panel, 'log_message_received'):
+                control_panel.log_message_received.connect(self.on_control_panel_log_message)
+                self.log_message("✅ Señal de logs del ControlPanel conectada")
             
             self.log_message("✅ Señales del ControlPanel conectadas")
             
@@ -355,6 +382,25 @@ class TradingApp:
         if self.is_connected:
             self.refresh_market_data()
     
+    def on_control_panel_symbol_changed(self, symbol):
+        """Manejador para cambio de símbolo desde ControlPanel."""
+        try:
+            self.current_symbol = symbol
+            self.log_message(f"📈 Símbolo cambiado desde ControlPanel: {symbol}")
+            
+            # Actualizar UI principal si existe
+            if hasattr(self.main_window, 'cmb_symbol'):
+                index = self.main_window.cmb_symbol.findText(symbol)
+                if index >= 0:
+                    self.main_window.cmb_symbol.setCurrentIndex(index)
+            
+            # Refrescar datos
+            if self.is_connected:
+                self.refresh_market_data()
+                
+        except Exception as e:
+            self.log_message(f"❌ Error en on_control_panel_symbol_changed: {str(e)}")
+    
     def on_timeframe_changed(self, timeframe):
         """Manejador para cambio de timeframe."""
         # Convertir string a TimeFrame
@@ -375,17 +421,231 @@ class TradingApp:
         if self.is_connected:
             self.refresh_market_data()
     
-    def on_trading_signal(self, order_details):
-        """Manejador para señales de trading."""
-        action = "COMPRA" if 'buy' in str(order_details).lower() else "VENTA"
-        self.log_message(f"📤 Señal de {action} recibida: {order_details}")
+    def on_control_panel_timeframe_changed(self, timeframe_str):
+        """Manejador para cambio de timeframe desde ControlPanel."""
+        try:
+            # Actualizar timeframe actual
+            timeframe_map = {
+                'M1': TimeFrame.M1, 'M5': TimeFrame.M5, 'M15': TimeFrame.M15,
+                'M30': TimeFrame.M30, 'H1': TimeFrame.H1, 'H4': TimeFrame.H4,
+                'D1': TimeFrame.D1, 'W1': TimeFrame.W1
+            }
+            
+            if timeframe_str in timeframe_map:
+                self.current_timeframe = timeframe_map[timeframe_str]
+                self.log_message(f"⏰ Timeframe cambiado desde ControlPanel: {timeframe_str}")
+                
+                # Actualizar UI principal si existe
+                if hasattr(self.main_window, 'cmb_timeframe'):
+                    index = self.main_window.cmb_timeframe.findText(timeframe_str)
+                    if index >= 0:
+                        self.main_window.cmb_timeframe.setCurrentIndex(index)
+                
+                # Refrescar datos
+                if self.is_connected:
+                    self.refresh_market_data()
+                    
+        except Exception as e:
+            self.log_message(f"❌ Error en on_control_panel_timeframe_changed: {str(e)}")
+    
+    def execute_buy_order(self, order_details):
+        """Ejecutar una orden de compra."""
+        try:
+            self.log_message("🟢 Ejecutando orden de COMPRA...")
+            
+            if not self.is_connected or not self.order_repository:
+                error_msg = "No conectado a MT5 o repositorio no disponible"
+                self.log_message(f"❌ {error_msg}", "ERROR")
+                if hasattr(self.main_window, 'control_panel'):
+                    self.main_window.control_panel.add_log_message(f"❌ {error_msg}", "ERROR")
+                return
+            
+            # Verificar que tenemos el caso de uso de place_order
+            if not self.place_order_use_case:
+                # Crear caso de uso
+                self.place_order_use_case = create_place_order_use_case(self.order_repository)
+            
+            # Preparar request
+            from src.application.use_cases.place_order import PlaceOrderRequest
+            
+            request = PlaceOrderRequest(
+                symbol=order_details.get('symbol', self.current_symbol),
+                operation='buy',
+                volume=order_details.get('volume', 0.1),
+                stop_loss=order_details.get('sl', 0.0),
+                take_profit=order_details.get('tp', 0.0),
+                comment=order_details.get('comment', 'Compra desde ControlPanel'),
+                price=order_details.get('price', 0.0),
+                magic_number=234000,
+                sl_is_pips=order_details.get('sl', 0.0) >= 0,  # True si es pips positivo
+                tp_is_pips=order_details.get('tp', 0.0) >= 0   # True si es pips positivo
+            )
+            
+            # Ejecutar orden
+            response = self.place_order_use_case.execute(request)
+            
+            # Manejar respuesta
+            if response.success:
+                self.log_message(f"✅ Orden de COMPRA ejecutada - Ticket: {response.ticket}")
+                if hasattr(self.main_window, 'control_panel'):
+                    # Agregar orden al historial
+                    order_data = {
+                        'ticket': response.ticket,
+                        'symbol': response.symbol,
+                        'type': 0,  # 0 = compra
+                        'volume': response.volume,
+                        'price': response.price,
+                        'sl': response.stop_loss,
+                        'tp': response.take_profit,
+                        'profit': 0.0,
+                        'comment': order_details.get('comment', 'Compra desde ControlPanel'),
+                        'time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'status': 'Ejecutada'
+                    }
+                    self.main_window.control_panel.add_order(order_data)
+                    
+                    # Enviar mensaje al log del ControlPanel
+                    self.main_window.control_panel.add_log_message(
+                        f"✅ Orden de COMPRA ejecutada exitosamente. Ticket: {response.ticket}", 
+                        "TRADE"
+                    )
+            else:
+                error_msg = f"❌ Error en orden de COMPRA: {response.message}"
+                self.log_message(error_msg, "ERROR")
+                if hasattr(self.main_window, 'control_panel'):
+                    self.main_window.control_panel.add_log_message(error_msg, "ERROR")
+            
+            # Refrescar posiciones
+            self.refresh_positions()
+            
+        except Exception as e:
+            error_msg = f"❌ Error ejecutando orden de compra: {str(e)}"
+            self.log_message(error_msg, "ERROR")
+            if hasattr(self.main_window, 'control_panel'):
+                self.main_window.control_panel.add_log_message(error_msg, "ERROR")
+    
+    def execute_sell_order(self, order_details):
+        """Ejecutar una orden de venta."""
+        try:
+            self.log_message("🔴 Ejecutando orden de VENTA...")
+            
+            if not self.is_connected or not self.order_repository:
+                error_msg = "No conectado a MT5 o repositorio no disponible"
+                self.log_message(f"❌ {error_msg}", "ERROR")
+                if hasattr(self.main_window, 'control_panel'):
+                    self.main_window.control_panel.add_log_message(f"❌ {error_msg}", "ERROR")
+                return
+            
+            # Verificar que tenemos el caso de uso de place_order
+            if not self.place_order_use_case:
+                # Crear caso de uso
+                self.place_order_use_case = create_place_order_use_case(self.order_repository)
+            
+            # Preparar request
+            from src.application.use_cases.place_order import PlaceOrderRequest
+            
+            request = PlaceOrderRequest(
+                symbol=order_details.get('symbol', self.current_symbol),
+                operation='sell',
+                volume=order_details.get('volume', 0.1),
+                stop_loss=order_details.get('sl', 0.0),
+                take_profit=order_details.get('tp', 0.0),
+                comment=order_details.get('comment', 'Venta desde ControlPanel'),
+                price=order_details.get('price', 0.0),
+                magic_number=234000,
+                sl_is_pips=order_details.get('sl', 0.0) >= 0,  # True si es pips positivo
+                tp_is_pips=order_details.get('tp', 0.0) >= 0   # True si es pips positivo
+            )
+            
+            # Ejecutar orden
+            response = self.place_order_use_case.execute(request)
+            
+            # Manejar respuesta
+            if response.success:
+                self.log_message(f"✅ Orden de VENTA ejecutada - Ticket: {response.ticket}")
+                if hasattr(self.main_window, 'control_panel'):
+                    # Agregar orden al historial
+                    order_data = {
+                        'ticket': response.ticket,
+                        'symbol': response.symbol,
+                        'type': 1,  # 1 = venta
+                        'volume': response.volume,
+                        'price': response.price,
+                        'sl': response.stop_loss,
+                        'tp': response.take_profit,
+                        'profit': 0.0,
+                        'comment': order_details.get('comment', 'Venta desde ControlPanel'),
+                        'time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'status': 'Ejecutada'
+                    }
+                    self.main_window.control_panel.add_order(order_data)
+                    
+                    # Enviar mensaje al log del ControlPanel
+                    self.main_window.control_panel.add_log_message(
+                        f"✅ Orden de VENTA ejecutada exitosamente. Ticket: {response.ticket}", 
+                        "TRADE"
+                    )
+            else:
+                error_msg = f"❌ Error en orden de VENTA: {response.message}"
+                self.log_message(error_msg, "ERROR")
+                if hasattr(self.main_window, 'control_panel'):
+                    self.main_window.control_panel.add_log_message(error_msg, "ERROR")
+            
+            # Refrescar posiciones
+            self.refresh_positions()
+            
+        except Exception as e:
+            error_msg = f"❌ Error ejecutando orden de venta: {str(e)}"
+            self.log_message(error_msg, "ERROR")
+            if hasattr(self.main_window, 'control_panel'):
+                self.main_window.control_panel.add_log_message(error_msg, "ERROR")
+    
+    def refresh_positions(self):
+        """Refrescar lista de posiciones abiertas."""
+        try:
+            if not self.is_connected or not self.order_repository:
+                return
+            
+            # Obtener posiciones abiertas
+            positions = self.order_repository.get_open_positions()
+            
+            # Actualizar ControlPanel
+            if hasattr(self.main_window, 'control_panel'):
+                self.main_window.control_panel.update_positions(positions)
+                
+                # Enviar log
+                if positions:
+                    self.main_window.control_panel.add_log_message(
+                        f"💰 {len(positions)} posición(es) abierta(s) actualizadas", 
+                        "INFO"
+                    )
+            
+        except Exception as e:
+            error_msg = f"❌ Error refrescando posiciones: {str(e)}"
+            self.log_message(error_msg, "ERROR")
+            if hasattr(self.main_window, 'control_panel'):
+                self.main_window.control_panel.add_log_message(error_msg, "ERROR")
+    
+    def on_control_panel_log_message(self, message, msg_type="INFO"):
+        """Manejador para mensajes de log desde ControlPanel."""
+        try:
+            self.log_message(f"[CP] {message}", msg_type)
+        except Exception as e:
+            print(f"Error procesando log del ControlPanel: {str(e)}")
     
     def connect_to_mt5(self):
         """Conectar a MetaTrader 5."""
         try:
+            # Deshabilitar botón durante conexión
             if hasattr(self.main_window, 'btn_connect'):
                 self.main_window.btn_connect.setEnabled(False)
                 self.main_window.btn_connect.setText("Conectando...")
+            
+            # Deshabilitar botones en ControlPanel si existe
+            if hasattr(self.main_window, 'control_panel'):
+                self.main_window.control_panel.btn_buy.setEnabled(False)
+                self.main_window.control_panel.btn_sell.setEnabled(False)
+                self.main_window.control_panel.add_log_message("🔄 Conectando a MT5...", "CONNECTION")
             
             self.mt5_use_case = create_connect_to_mt5_use_case(max_retries=3)
             
@@ -408,8 +668,12 @@ class TradingApp:
                 self.data_repository = create_mt5_data_repository()
                 self.order_repository = create_mt5_order_repository()
                 
-                # Crear caso de uso de datos
+                # Crear casos de uso
                 self.data_use_case = create_fetch_market_data_use_case(self.mt5_use_case)
+                self.place_order_use_case = create_place_order_use_case(self.order_repository)
+                self.place_pending_order_use_case = create_place_pending_order_use_case(self.order_repository)
+                self.modify_position_use_case = create_modify_position_use_case(self.order_repository)
+                self.close_position_use_case = create_close_position_use_case(self.order_repository)
                 
                 # Inicializar repositorios si tienen método initialize
                 if self.data_repository and hasattr(self.data_repository, 'initialize'):
@@ -423,6 +687,9 @@ class TradingApp:
                 # Actualizar información
                 self.update_account_info()
                 
+                # Refrescar posiciones
+                self.refresh_positions()
+                
                 # Aplicar indicadores a datos reales
                 QTimer.singleShot(500, self.apply_indicators_to_real_data)
                 
@@ -433,26 +700,56 @@ class TradingApp:
                     account_info = getattr(data, 'account_info', {})
                 
                 login = account_info.get('login', 'N/A') if isinstance(account_info, dict) else getattr(account_info, 'login', 'N/A')
+                
+                # Enviar logs al ControlPanel
+                if hasattr(self.main_window, 'control_panel'):
+                    self.main_window.control_panel.add_log_message(f"✅ Conectado a MT5 - Cuenta: {login}", "CONNECTION")
+                    self.main_window.control_panel.add_log_message(f"📈 Aplicando {self.current_candles_count} velas con indicadores...", "INFO")
+                    self.main_window.control_panel.update_connection_status(True, f"✅ Conectado - Cuenta: {login}")
+                    
+                    # Habilitar botones de trading
+                    self.main_window.control_panel.btn_buy.setEnabled(True)
+                    self.main_window.control_panel.btn_sell.setEnabled(True)
+                    self.main_window.control_panel.btn_refresh_orders.setEnabled(True)
+                
                 self.log_message(f"✅ Conectado a MT5 - Cuenta: {login}")
                 self.log_message(f"📈 Aplicando {self.current_candles_count} velas con indicadores...")
                 
             else:
                 self.update_connection_status(False, f"❌ {message[:30]}")
+                
+                # Enviar log al ControlPanel
+                if hasattr(self.main_window, 'control_panel'):
+                    self.main_window.control_panel.add_log_message(f"❌ Error de conexión: {message}", "ERROR")
+                    self.main_window.control_panel.update_connection_status(False, f"❌ Error: {message[:30]}")
+                
                 self.log_message(f"❌ Error de conexión: {message}")
                 
         except Exception as e:
             error_msg = f"Error en conexión MT5: {str(e)}"
             self.update_connection_status(False, "❌ Error")
+            
+            # Enviar log al ControlPanel
+            if hasattr(self.main_window, 'control_panel'):
+                self.main_window.control_panel.add_log_message(f"❌ {error_msg}", "ERROR")
+                self.main_window.control_panel.update_connection_status(False, "❌ Error")
+            
             self.log_message(f"❌ {error_msg}")
             QMessageBox.critical(self.main_window, "Error de conexión", error_msg)
             
         finally:
+            # Rehabilitar botones
             if hasattr(self.main_window, 'btn_connect'):
                 self.main_window.btn_connect.setEnabled(True)
                 if self.is_connected:
                     self.main_window.btn_connect.setText("🔌 Desconectar")
                 else:
                     self.main_window.btn_connect.setText("🔌 Conectar a MT5")
+                    
+                    # Deshabilitar botones en ControlPanel
+                    if hasattr(self.main_window, 'control_panel'):
+                        self.main_window.control_panel.btn_buy.setEnabled(False)
+                        self.main_window.control_panel.btn_sell.setEnabled(False)
     
     def apply_indicators_to_real_data(self):
         """Aplicar indicadores a datos reales de MT5."""
@@ -465,6 +762,9 @@ class TradingApp:
     def disconnect_from_mt5(self):
         """Desconectar de MetaTrader 5."""
         try:
+            if hasattr(self.main_window, 'control_panel'):
+                self.main_window.control_panel.add_log_message("🔌 Desconectando de MT5...", "CONNECTION")
+            
             if self.mt5_use_case:
                 result = self.mt5_use_case.disconnect()
                 if isinstance(result, dict):
@@ -475,6 +775,16 @@ class TradingApp:
             self.is_connected = False
             self.update_connection_status(False, "❌ Desconectado")
             
+            # Actualizar ControlPanel
+            if hasattr(self.main_window, 'control_panel'):
+                self.main_window.control_panel.update_connection_status(False, "❌ Desconectado")
+                self.main_window.control_panel.add_log_message("🔌 Desconectado de MT5 - Volviendo a modo demo", "INFO")
+                
+                # Deshabilitar botones de trading
+                self.main_window.control_panel.btn_buy.setEnabled(False)
+                self.main_window.control_panel.btn_sell.setEnabled(False)
+                self.main_window.control_panel.btn_refresh_orders.setEnabled(False)
+            
             if hasattr(self.main_window, 'btn_connect'):
                 self.main_window.btn_connect.setText("🔌 Conectar a MT5")
             
@@ -484,7 +794,10 @@ class TradingApp:
             self.log_message("🔌 Desconectado de MT5 - Volviendo a modo demo")
             
         except Exception as e:
-            self.log_message(f"❌ Error desconectando: {str(e)}")
+            error_msg = f"Error desconectando: {str(e)}"
+            self.log_message(f"❌ {error_msg}")
+            if hasattr(self.main_window, 'control_panel'):
+                self.main_window.control_panel.add_log_message(f"❌ {error_msg}", "ERROR")
     
     def toggle_mt5_connection(self):
         """Alternar entre conexión y desconexión."""
@@ -521,7 +834,7 @@ class TradingApp:
                 else:
                     account_info = getattr(data, 'account_info', {})
                 
-                # Actualizar UI
+                # Actualizar UI principal
                 if hasattr(self.main_window, 'lbl_account'):
                     if isinstance(account_info, dict):
                         login = account_info.get('login', '--')
@@ -549,6 +862,10 @@ class TradingApp:
                     else:
                         margin = getattr(account_info, 'margin', 0)
                     self.main_window.lbl_margin.setText(f"Margen: ${margin:.2f}")
+                
+                # Actualizar ControlPanel
+                if hasattr(self.main_window, 'control_panel'):
+                    self.main_window.control_panel.update_account_info(account_info)
                     
         except Exception as e:
             self.log_message(f"❌ Error actualizando cuenta: {str(e)}")
@@ -563,6 +880,9 @@ class TradingApp:
         
         # Actualizar información de cuenta
         self.update_account_info()
+        
+        # Actualizar posiciones
+        self.refresh_positions()
         
         # Actualizar datos del mercado
         if self.data_use_case:
@@ -611,23 +931,33 @@ class TradingApp:
         except Exception as e:
             self.log_message(f"❌ Error actualizando datos: {str(e)}")
     
-    def log_message(self, message: str):
+    def log_message(self, message: str, msg_type="INFO"):
         """Agregar mensaje al log."""
         try:
             timestamp = datetime.now().strftime("%H:%M:%S")
-            log_entry = f"[{timestamp}] {message}"
             
-            # Log en UI si existe
+            # Log en UI principal si existe
             if hasattr(self.main_window, 'txt_logs'):
-                self.main_window.txt_logs.append(log_entry)
+                self.main_window.txt_logs.append(f"[{timestamp}] {message}")
             elif hasattr(self.main_window, 'txt_mini_log'):
-                self.main_window.txt_mini_log.append(log_entry)
+                self.main_window.txt_mini_log.append(f"[{timestamp}] {message}")
             
-            # Imprimir en consola
-            print(log_entry)
+            # Log en ControlPanel si existe
+            if hasattr(self.main_window, 'control_panel'):
+                self.main_window.control_panel.add_log_message(message, msg_type)
             
-        except:
-            pass
+            # Imprimir en consola con colores
+            if msg_type == "ERROR":
+                print(f"\033[91m[{timestamp}] {message}\033[0m")  # Rojo
+            elif msg_type == "WARNING":
+                print(f"\033[93m[{timestamp}] {message}\033[0m")  # Amarillo
+            elif msg_type == "INFO":
+                print(f"\033[92m[{timestamp}] {message}\033[0m")  # Verde
+            else:
+                print(f"[{timestamp}] {message}")
+            
+        except Exception as e:
+            print(f"Error en log_message: {str(e)}")
     
     def run(self):
         """Ejecutar la aplicación."""

@@ -2628,9 +2628,24 @@ class ControlPanel(QWidget):
         # Botón de conexión
         self.btn_connect = QPushButton("🔌 Conectar")
         self.btn_connect.clicked.connect(self.on_connect_clicked)
+        self.btn_connect.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 8px;
+                font-weight: bold;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
         
         # Estado de conexión
         self.lbl_connection = QLabel("❌ Desconectado")
+        self.lbl_connection.setStyleSheet("color: #ff6666; font-weight: bold;")
         
         connection_layout.addWidget(self.btn_connect, 0, 0, 1, 2)
         connection_layout.addWidget(self.lbl_connection, 1, 0, 1, 2)
@@ -2657,6 +2672,7 @@ class ControlPanel(QWidget):
         
         # Precio actual
         self.lbl_current_price = QLabel("Bid: -- | Ask: --")
+        self.lbl_current_price.setStyleSheet("color: #ffff00; font-weight: bold;")
         symbol_layout.addWidget(self.lbl_current_price, 2, 0, 1, 2)
         
         # 3. Grupo de operación rápida (MODIFICADO PARA SL/TP NEGATIVOS)
@@ -2724,9 +2740,10 @@ class ControlPanel(QWidget):
         self.btn_buy = QPushButton("🟢 COMPRAR")
         self.btn_buy.clicked.connect(self.on_buy_clicked)
         self.btn_buy.setEnabled(False)
+        # COLOR PLOMO CUANDO ESTÁ DESHABILITADO
         self.btn_buy.setStyleSheet("""
             QPushButton {
-                background-color: #4CAF50;
+                background-color: #808080;
                 color: white;
                 border: none;
                 padding: 10px;
@@ -2738,16 +2755,18 @@ class ControlPanel(QWidget):
                 background-color: #45a049;
             }
             QPushButton:disabled {
-                background-color: #666;
+                background-color: #666666;
+                color: #999999;
             }
         """)
         
         self.btn_sell = QPushButton("🔴 VENDER")
         self.btn_sell.clicked.connect(self.on_sell_clicked)
         self.btn_sell.setEnabled(False)
+        # COLOR PLOMO CUANDO ESTÁ DESHABILITADO
         self.btn_sell.setStyleSheet("""
             QPushButton {
-                background-color: #F44336;
+                background-color: #808080;
                 color: white;
                 border: none;
                 padding: 10px;
@@ -2759,7 +2778,8 @@ class ControlPanel(QWidget):
                 background-color: #d32f2f;
             }
             QPushButton:disabled {
-                background-color: #666;
+                background-color: #666666;
+                color: #999999;
             }
         """)
         
@@ -2800,10 +2820,44 @@ class ControlPanel(QWidget):
         self.btn_refresh_positions = QPushButton("🔄 Actualizar")
         self.btn_refresh_positions.clicked.connect(self.on_refresh_positions)
         self.btn_refresh_positions.setEnabled(False)
+        self.btn_refresh_positions.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 8px;
+                font-weight: bold;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+            QPushButton:disabled {
+                background-color: #666;
+            }
+        """)
         
         self.btn_close_all = QPushButton("❌ Cerrar Todo")
         self.btn_close_all.clicked.connect(self.on_close_all_positions)
         self.btn_close_all.setEnabled(False)
+        self.btn_close_all.setStyleSheet("""
+            QPushButton {
+                background-color: #F44336;
+                color: white;
+                border: none;
+                padding: 8px;
+                font-weight: bold;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+            QPushButton:disabled {
+                background-color: #666;
+            }
+        """)
         
         button_layout.addWidget(self.btn_refresh_positions)
         button_layout.addWidget(self.btn_close_all)
@@ -2823,6 +2877,7 @@ class ControlPanel(QWidget):
         
         # Label de resumen
         self.lbl_positions_summary = QLabel("No hay posiciones abiertas")
+        self.lbl_positions_summary.setStyleSheet("color: #aaaaaa; font-size: 12px;")
         
         layout.addLayout(button_layout)
         layout.addWidget(self.lbl_positions_summary)
@@ -2858,10 +2913,12 @@ class ControlPanel(QWidget):
         
         financial_layout.addWidget(QLabel("Balance:"), 0, 0)
         self.lbl_balance = QLabel("$ --")
+        self.lbl_balance.setStyleSheet("color: #4CAF50; font-weight: bold;")
         financial_layout.addWidget(self.lbl_balance, 0, 1)
         
         financial_layout.addWidget(QLabel("Equity:"), 1, 0)
         self.lbl_equity = QLabel("$ --")
+        self.lbl_equity.setStyleSheet("color: #2196F3; font-weight: bold;")
         financial_layout.addWidget(self.lbl_equity, 1, 1)
         
         financial_layout.addWidget(QLabel("Margen:"), 2, 0)
@@ -2870,6 +2927,7 @@ class ControlPanel(QWidget):
         
         financial_layout.addWidget(QLabel("Margen Libre:"), 3, 0)
         self.lbl_free_margin = QLabel("$ --")
+        self.lbl_free_margin.setStyleSheet("color: #FF9800; font-weight: bold;")
         financial_layout.addWidget(self.lbl_free_margin, 3, 1)
         
         # Agregar grupos al layout
@@ -2922,9 +2980,37 @@ class ControlPanel(QWidget):
         
         self.btn_save_settings = QPushButton("💾 Guardar")
         self.btn_save_settings.clicked.connect(self.on_save_settings)
+        self.btn_save_settings.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                padding: 8px;
+                font-weight: bold;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #45a049;
+            }
+        """)
         
         self.btn_load_settings = QPushButton("📂 Cargar")
         self.btn_load_settings.clicked.connect(self.on_load_settings)
+        self.btn_load_settings.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                border: none;
+                padding: 8px;
+                font-weight: bold;
+                border-radius: 4px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #1976D2;
+            }
+        """)
         
         actions_layout.addWidget(self.btn_save_settings)
         actions_layout.addWidget(self.btn_load_settings)
@@ -2933,6 +3019,16 @@ class ControlPanel(QWidget):
         self.txt_settings_info = QTextEdit()
         self.txt_settings_info.setReadOnly(True)
         self.txt_settings_info.setMaximumHeight(100)
+        self.txt_settings_info.setStyleSheet("""
+            QTextEdit {
+                background-color: #1a1a1a;
+                color: #ffffff;
+                border: 1px solid #444;
+                border-radius: 3px;
+                padding: 5px;
+                font-size: 11px;
+            }
+        """)
         self.txt_settings_info.setPlaceholderText("Información de configuración...")
         
         # Agregar grupos al layout
@@ -2951,26 +3047,132 @@ class ControlPanel(QWidget):
         
         if connected:
             self.lbl_connection.setText("✅ Conectado")
+            self.lbl_connection.setStyleSheet("color: #4CAF50; font-weight: bold;")
             self.add_log_message(f"✅ Conectado a MT5 - {server_info}", "CONNECTION")
             self.btn_connect.setText("🔌 Desconectar")
             self.btn_connect.clicked.disconnect()
             self.btn_connect.clicked.connect(self.on_disconnect_clicked)
+            self.btn_connect.setStyleSheet("""
+                QPushButton {
+                    background-color: #F44336;
+                    color: white;
+                    border: none;
+                    padding: 8px;
+                    font-weight: bold;
+                    border-radius: 4px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: #d32f2f;
+                }
+            """)
             
+            # Cambiar color de botones de compra/venta cuando están habilitados
             self.btn_buy.setEnabled(True)
             self.btn_sell.setEnabled(True)
+            self.btn_buy.setStyleSheet("""
+                QPushButton {
+                    background-color: #4CAF50;
+                    color: white;
+                    border: none;
+                    padding: 10px;
+                    font-weight: bold;
+                    border-radius: 5px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: #45a049;
+                }
+                QPushButton:disabled {
+                    background-color: #666666;
+                    color: #999999;
+                }
+            """)
+            self.btn_sell.setStyleSheet("""
+                QPushButton {
+                    background-color: #F44336;
+                    color: white;
+                    border: none;
+                    padding: 10px;
+                    font-weight: bold;
+                    border-radius: 5px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: #d32f2f;
+                }
+                QPushButton:disabled {
+                    background-color: #666666;
+                    color: #999999;
+                }
+            """)
+            
             self.btn_refresh_positions.setEnabled(True)
             self.btn_close_all.setEnabled(True)
             self.btn_refresh_orders.setEnabled(True)
         else:
             self.lbl_connection.setText("❌ Desconectado")
+            self.lbl_connection.setStyleSheet("color: #ff6666; font-weight: bold;")
             if message:
                 self.add_log_message(f"❌ Desconectado de MT5: {message}", "ERROR")
             self.btn_connect.setText("🔌 Conectar")
             self.btn_connect.clicked.disconnect()
             self.btn_connect.clicked.connect(self.on_connect_clicked)
+            self.btn_connect.setStyleSheet("""
+                QPushButton {
+                    background-color: #4CAF50;
+                    color: white;
+                    border: none;
+                    padding: 8px;
+                    font-weight: bold;
+                    border-radius: 4px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: #45a049;
+                }
+            """)
             
+            # Cambiar botones de compra/venta a color plomo (gris) cuando están deshabilitados
             self.btn_buy.setEnabled(False)
             self.btn_sell.setEnabled(False)
+            self.btn_buy.setStyleSheet("""
+                QPushButton {
+                    background-color: #808080;
+                    color: white;
+                    border: none;
+                    padding: 10px;
+                    font-weight: bold;
+                    border-radius: 5px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: #45a049;
+                }
+                QPushButton:disabled {
+                    background-color: #666666;
+                    color: #999999;
+                }
+            """)
+            self.btn_sell.setStyleSheet("""
+                QPushButton {
+                    background-color: #808080;
+                    color: white;
+                    border: none;
+                    padding: 10px;
+                    font-weight: bold;
+                    border-radius: 5px;
+                    font-size: 12px;
+                }
+                QPushButton:hover {
+                    background-color: #d32f2f;
+                }
+                QPushButton:disabled {
+                    background-color: #666666;
+                    color: #999999;
+                }
+            """)
+            
             self.btn_refresh_positions.setEnabled(False)
             self.btn_close_all.setEnabled(False)
             self.btn_refresh_orders.setEnabled(False)
@@ -3034,6 +3236,20 @@ class ControlPanel(QWidget):
             
             # Botón de cerrar
             close_btn = QPushButton("Cerrar")
+            close_btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #F44336;
+                    color: white;
+                    border: none;
+                    padding: 5px;
+                    font-weight: bold;
+                    border-radius: 3px;
+                    font-size: 11px;
+                }
+                QPushButton:hover {
+                    background-color: #d32f2f;
+                }
+            """)
             ticket = pos.get('ticket')
             if ticket:
                 close_btn.clicked.connect(lambda checked, t=ticket: self.on_close_position(t))
