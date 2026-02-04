@@ -2,7 +2,7 @@
 import sys
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QLabel, QComboBox, QTabWidget,
-                             QSplitter, QGroupBox, QGridLayout, QMessageBox, QFrame)
+                             QSplitter, QGroupBox, QGridLayout, QMessageBox, QFrame,QApplication)
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QColor, QPalette
 import numpy as np
@@ -52,7 +52,12 @@ class MainWindow(QMainWindow):
         
         # Iniciar en pantalla completa
         self.showMaximized()
-        
+        screen = QApplication.desktop().screenGeometry()
+        self.resize(1920, 1080)
+        self.move(
+        (screen.width() - self.width()) // 2,
+        (screen.height() - self.height()) // 2
+        )
         # Tema oscuro
         self.set_dark_theme()
         

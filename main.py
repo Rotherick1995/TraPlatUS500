@@ -23,9 +23,11 @@ try:
     from src.domain.value_objects.timeframe import TimeFrame
     from src.config import settings
     
-    # Importaciones para indicadores
+    # Importar ControlPanel modularizado
+    from src.infrastructure.ui.control_panel import ControlPanel
+    
+    # Importaciones para indicadores (opcional)
     try:
-        # Intentar importar indicadores del dominio
         from src.domain.indicators.sma_indicator import SMAIndicator
         from src.domain.indicators.ema_indicator import EMAIndicator
         from src.domain.indicators.rsi_indicator import RSIIndicator
@@ -49,7 +51,7 @@ except ImportError as e:
 class TradingApp:
     def __init__(self):
         self.app = QApplication(sys.argv)
-        self.app.setApplicationName("US500 Trading Platform - Con Indicadores")
+        self.app.setApplicationName("US500 Trading Platform - Modularizada")
         self.app.setStyle('Fusion')
         
         self.is_connected = False
@@ -85,6 +87,9 @@ class TradingApp:
             self.main_window = MainWindow()
             self.main_window.show()
             
+            # Inicializar ControlPanel
+            self.init_control_panel()
+            
             # Configurar conexiones de señales
             self.setup_signals()
             
@@ -99,6 +104,30 @@ class TradingApp:
             print(f"Error inicializando aplicación: {str(e)}")
             traceback.print_exc()
             sys.exit(1)
+    
+    def init_control_panel(self):
+        """Inicializar y configurar ControlPanel."""
+        try:
+            # Verificar que el main_window tenga chart_view
+            if not hasattr(self.main_window, 'chart_view'):
+                print("⚠️ MainWindow no tiene chart_view")
+                return
+            
+            # Obtener ControlPanel del main_window
+            self.control_panel = self.main_window.control_panel
+            
+            # Configurar información inicial
+            self.control_panel.update_symbol(self.current_symbol)
+            self.control_panel.update_timeframe(self.current_timeframe.value)
+            
+            # Configurar cantidad de velas inicial
+            if hasattr(self.control_panel, 'candles_count_changed'):
+                self.control_panel.candles_count_changed.emit(self.current_candles_count)
+            
+            print("✅ ControlPanel inicializado correctamente")
+            
+        except Exception as e:
+            print(f"⚠️ Error inicializando ControlPanel: {str(e)}")
     
     def init_indicators(self):
         """Inicializar instancias de indicadores."""
@@ -147,17 +176,8 @@ class TradingApp:
             if hasattr(self.main_window, 'cmb_timeframe'):
                 self.main_window.cmb_timeframe.currentTextChanged.connect(self.on_timeframe_changed)
             
-            # Botón de aplicar indicadores
-            if hasattr(self.main_window, 'btn_apply_indicators'):
-                self.main_window.btn_apply_indicators.clicked.connect(self.apply_indicators_to_chart)
-            
-            # Señal de indicadores actualizados
-            if hasattr(self.main_window, 'indicators_updated'):
-                self.main_window.indicators_updated.connect(self.on_indicators_updated)
-            
-            # Si el main window tiene control panel, conectar sus señales
-            if hasattr(self.main_window, 'control_panel'):
-                self.connect_control_panel_signals()
+            # Conectar señales del ControlPanel
+            self.connect_control_panel_signals()
             
             self.log_message("✅ Señales conectadas")
             
@@ -165,41 +185,66 @@ class TradingApp:
             self.log_message(f"⚠️ Error configurando señales: {str(e)}")
     
     def connect_control_panel_signals(self):
-        """Conectar señales del control panel."""
+        """Conectar señales del ControlPanel."""
         try:
+            # Verificar que existe control_panel
+            if not hasattr(self.main_window, 'control_panel'):
+                self.log_message("⚠️ ControlPanel no disponible en MainWindow")
+                return
+            
             control_panel = self.main_window.control_panel
             
             # Señales de conexión
             if hasattr(control_panel, 'connect_requested'):
                 control_panel.connect_requested.connect(self.connect_to_mt5)
+                self.log_message("✅ Señal connect_requested conectada")
+            
             if hasattr(control_panel, 'disconnect_requested'):
                 control_panel.disconnect_requested.connect(self.disconnect_from_mt5)
+                self.log_message("✅ Señal disconnect_requested conectada")
             
             # Señales de actualización
             if hasattr(control_panel, 'symbol_changed'):
                 control_panel.symbol_changed.connect(self.on_control_panel_symbol_changed)
+                self.log_message("✅ Señal symbol_changed conectada")
+            
             if hasattr(control_panel, 'timeframe_changed'):
                 control_panel.timeframe_changed.connect(self.on_control_panel_timeframe_changed)
+                self.log_message("✅ Señal timeframe_changed conectada")
             
             # Señal de indicadores
             if hasattr(control_panel, 'indicators_updated'):
                 control_panel.indicators_updated.connect(self.on_indicators_updated_from_control)
-                self.log_message("✅ Señal de indicadores del ControlPanel conectada")
+                self.log_message("✅ Señal indicators_updated conectada")
             
             # Señal de cantidad de velas
             if hasattr(control_panel, 'candles_count_changed'):
                 control_panel.candles_count_changed.connect(self.on_candles_count_changed)
-                self.log_message("✅ Señal de cantidad de velas conectada")
+                self.log_message("✅ Señal candles_count_changed conectada")
             
             # Señal de logs
             if hasattr(control_panel, 'log_message_received'):
                 control_panel.log_message_received.connect(self.on_control_panel_log_message)
-                self.log_message("✅ Señal de logs del ControlPanel conectada")
+                self.log_message("✅ Señal log_message_received conectada")
             
-            self.log_message("✅ Señales del ControlPanel conectadas")
+            # Señales de trading
+            if hasattr(control_panel, 'buy_requested'):
+                control_panel.buy_requested.connect(self.on_buy_requested)
+                self.log_message("✅ Señal buy_requested conectada")
+            
+            if hasattr(control_panel, 'sell_requested'):
+                control_panel.sell_requested.connect(self.on_sell_requested)
+                self.log_message("✅ Señal sell_requested conectada")
+            
+            if hasattr(control_panel, 'refresh_positions'):
+                control_panel.refresh_positions.connect(self.on_refresh_positions)
+                self.log_message("✅ Señal refresh_positions conectada")
+            
+            self.log_message("✅ Todas las señales del ControlPanel conectadas")
             
         except Exception as e:
-            self.log_message(f"⚠️ Error conectando ControlPanel: {str(e)}")
+            self.log_message(f"❌ Error conectando ControlPanel: {str(e)}")
+            traceback.print_exc()
     
     def load_demo_data(self):
         """Cargar datos demo para mostrar indicadores."""
@@ -370,9 +415,15 @@ class TradingApp:
             
             # Actualizar UI principal si existe
             if hasattr(self.main_window, 'cmb_symbol'):
+                self.main_window.cmb_symbol.blockSignals(True)
                 index = self.main_window.cmb_symbol.findText(symbol)
                 if index >= 0:
                     self.main_window.cmb_symbol.setCurrentIndex(index)
+                self.main_window.cmb_symbol.blockSignals(False)
+            
+            # Actualizar chart_view
+            if hasattr(self.main_window, 'chart_view'):
+                self.main_window.chart_view.current_symbol = symbol
             
             # Refrescar datos
             if self.is_connected:
@@ -417,9 +468,15 @@ class TradingApp:
                 
                 # Actualizar UI principal si existe
                 if hasattr(self.main_window, 'cmb_timeframe'):
+                    self.main_window.cmb_timeframe.blockSignals(True)
                     index = self.main_window.cmb_timeframe.findText(timeframe_str)
                     if index >= 0:
                         self.main_window.cmb_timeframe.setCurrentIndex(index)
+                    self.main_window.cmb_timeframe.blockSignals(False)
+                
+                # Actualizar chart_view
+                if hasattr(self.main_window, 'chart_view'):
+                    self.main_window.chart_view.current_timeframe = timeframe_str
                 
                 # Refrescar datos
                 if self.is_connected:
@@ -435,9 +492,35 @@ class TradingApp:
         except Exception as e:
             print(f"Error procesando log del ControlPanel: {str(e)}")
     
+    def on_buy_requested(self, order_data):
+        """Manejador para solicitud de compra desde ControlPanel."""
+        try:
+            self.log_message(f"📈 Orden de COMPRA recibida: {order_data}", "TRADE")
+            # Aquí implementarías la lógica para enviar la orden a MT5
+        except Exception as e:
+            self.log_message(f"❌ Error procesando orden de compra: {str(e)}", "ERROR")
+    
+    def on_sell_requested(self, order_data):
+        """Manejador para solicitud de venta desde ControlPanel."""
+        try:
+            self.log_message(f"📉 Orden de VENTA recibida: {order_data}", "TRADE")
+            # Aquí implementarías la lógica para enviar la orden a MT5
+        except Exception as e:
+            self.log_message(f"❌ Error procesando orden de venta: {str(e)}", "ERROR")
+    
+    def on_refresh_positions(self):
+        """Manejador para refrescar posiciones desde ControlPanel."""
+        try:
+            self.log_message("🔄 Refrescando posiciones...", "INFO")
+            # Aquí implementarías la lógica para refrescar posiciones
+        except Exception as e:
+            self.log_message(f"❌ Error refrescando posiciones: {str(e)}", "ERROR")
+    
     def connect_to_mt5(self):
         """Conectar a MetaTrader 5."""
         try:
+            self.log_message("🔄 Iniciando conexión a MT5...", "CONNECTION")
+            
             # Deshabilitar botón durante conexión
             if hasattr(self.main_window, 'btn_connect'):
                 self.main_window.btn_connect.setEnabled(False)
@@ -521,6 +604,7 @@ class TradingApp:
             
             self.log_message(f"❌ {error_msg}")
             QMessageBox.critical(self.main_window, "Error de conexión", error_msg)
+            traceback.print_exc()
             
         finally:
             # Rehabilitar botones
